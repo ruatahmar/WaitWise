@@ -1,4 +1,4 @@
-class apiResponse {
+class ApiResponse {
     constructor(
         public statusCode: number,
         public data: Record<string, unknown>,
@@ -6,4 +6,4 @@ class apiResponse {
     ) { }
 }
 
-export default apiResponse;
+export default ApiResponse;

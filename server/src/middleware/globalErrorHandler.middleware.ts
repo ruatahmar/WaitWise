@@ -1,5 +1,5 @@
 import { Response, Request, NextFunction, response } from "express";
-import apiError from "../utils/apiError.js";
+import ApiError from "../utils/apiError.js";
 
 const globalErrorHandler = (
     err: unknown,
@@ -7,7 +7,7 @@ const globalErrorHandler = (
     res: Response,
     next: NextFunction
 ) => {
-    if (err instanceof apiError) {
+    if (err instanceof ApiError) {
         return res.status(err.statusCode).json({
             status: err.statusCode,
             message: err.message
