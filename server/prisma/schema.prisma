@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum QueueStatus {
+  WAITING
+  SERVING
+  LATE
+  MISSED
+  CANCELLED
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  name      String
+  email     String    @unique
+  adminQueues Queue[] @relation("AdminQueues")
+  queueUsers QueueUser[] 
+}
+model Queue {
+  id          Int         @id @default(autoincrement())
+  name        String
+  admin       User        @relation("AdminQueues", fields: [adminId], references: [id])
+  adminId     Int
+  queueUsers  QueueUser[]
+  maxActiveUsers   Int?
+  turnExpiryMinutes    Int?        
+}
+model QueueUser {
+  id        Int    @id @default(autoincrement())
+  queue     Queue  @relation(fields: [queueId], references: [id])
+  queueId   Int
+  user      User   @relation(fields: [userId], references: [id])
+  userId    Int
+  joinedAt  DateTime @default(now())
+  status    QueueStatus @default(WAITING)
+  position  Int
+  token      String?    @unique
+  servedAt   DateTime?
+  expiresAt DateTime? 
+  updatedAt  DateTime   @updatedAt
+
+  @@unique([queueId, position])
+}
+
