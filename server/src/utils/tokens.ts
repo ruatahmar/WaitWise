@@ -1,4 +1,5 @@
-import jwt, { JwtPayload } from "jsonwebtoken";
+import jwt, { JwtPayload, SignOptions} from "jsonwebtoken";
+import ms from "ms";
 import "dotenv/config";
 import ApiError from "./apiError.js";
 
@@ -9,22 +10,27 @@ if (!privateKey) {
 const accessTokenExpiry = process.env.ACCESS_TOKEN_EXPIRY || "15m";
 const refreshTokenExpiry = process.env.REFRESH_TOKEN_EXPIRY || "7d";
 
+
+export const REFRESH_TOKEN_EXPIRY_MS = ms(
+  refreshTokenExpiry as ms.StringValue
+);
+
 export interface TokenPayload {
     userId: number;
 }
 
 export const generateAccessToken = (data: TokenPayload) => {
-    return jwt.sign(data, privateKey, { expiresIn: accessTokenExpiry });
+    return jwt.sign(data, privateKey, { expiresIn: accessTokenExpiry as SignOptions["expiresIn"]});
 };
 
 export const generateRefreshToken = (data: TokenPayload) => {
-    return jwt.sign(data, privateKey, { expiresIn: refreshTokenExpiry });
+    return jwt.sign(data, privateKey, { expiresIn: refreshTokenExpiry as SignOptions["expiresIn"]});
 };
 
 export const verifyToken = (token: string): TokenPayload => {
     const payload = jwt.verify(token, privateKey);
     if (!payload) {
-        throw new ApiError("Invalid or expired payload");
+        throw new ApiError(400,"Invalid or expired payload");
     }
     return payload as TokenPayload;
 };

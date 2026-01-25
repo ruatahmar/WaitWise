@@ -1,7 +1,6 @@
 import express from "express";
 import "dotenv/config";
 import cookieParser from "cookie-parser"
-import { connectDb } from "./config/db.js";
 import globalErrorHandler from "./middleware/globalErrorHandler.middleware.js";
 import queueRouter from "./routes/v1/queues.routes.js"
 import authRouter from "./routes/v1/auth.routes.js"
@@ -20,7 +19,7 @@ app.use("/api/v1/auth", authRouter)
 //global error handler
 app.use(globalErrorHandler)
 
-await connectDb()
+
 app.listen(PORT, () => {
     console.log(`Server running on port: ${PORT}`);
 });

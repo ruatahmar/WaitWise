@@ -3,6 +3,7 @@ import asyncHandler from "../../utils/asyncHandler.js";
 import { prisma } from "../../db/prisma.js";
 import ApiError from "../../utils/apiError.js";
 import bcrypt from "bcrypt"
+import ms from "ms"
 import { generateAccessToken, generateRefreshToken, TokenPayload } from "../../utils/tokens.js";
 import ApiResponse from "../../utils/apiResponse.js";
 
@@ -39,6 +40,13 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
         throw new ApiError(401, "Invalid email or password.")
     }
     const { accessToken, refreshToken } = generateTokens({ userId: user.id })
+    await prisma.refreshToken.create({
+        data: {
+            userId: user.id,
+            token: refreshToken,
+            expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+        }
+    })
     return res.status(200).cookie("refreshToken", refreshToken, options)
         .json(
             new ApiResponse(200, { accessToken }, "Login successful.")
@@ -65,17 +73,28 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
         data: {
             email,
             name: email.split("@")[0],
-            password: hashedPassword
+            password: hashedPassword,
         },
     });
-
     const { accessToken, refreshToken } = generateTokens({ userId: user.id })
+    await prisma.refreshToken.create({
+        data: {
+            userId: user.id,
+            token: refreshToken,
+            expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+        }
+    })
     return res.status(201).cookie("refreshToken", refreshToken, options)
         .json(
             new ApiResponse(201, { accessToken }, "Registration Successful")
         )
 });
 
-export const logout = asyncHandler(async (req: Request, res: Response) => {
+// export const logout = asyncHandler(async (req: Request, res: Response) => {
+//     const { email } = req.user;
 
-})
+// })
+
+// export const refresh = asyncHandler(async (req: Request, res: Response) => {
+
+// })

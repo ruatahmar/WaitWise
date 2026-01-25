@@ -19,8 +19,21 @@ model User {
   id        Int       @id @default(autoincrement())
   name      String
   email     String    @unique
+  password  String
   adminQueues Queue[] @relation("AdminQueues")
   queueUsers QueueUser[] 
+  refreshTokens RefreshToken[]
+}
+model RefreshToken {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    Int
+  token     String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  revoked   Boolean  @default(false)
+
+  @@index([userId])
 }
 model Queue {
   id          Int         @id @default(autoincrement())

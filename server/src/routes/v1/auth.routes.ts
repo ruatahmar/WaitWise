@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { login } from "../../controllers/v1/auth.controller.js";
-import { register } from "node:module";
+import { login, register } from "../../controllers/v1/auth.controller.js";
+
 
 const app = Router();
 
