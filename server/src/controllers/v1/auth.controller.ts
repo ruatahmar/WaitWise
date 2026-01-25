@@ -90,10 +90,35 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
         )
 });
 
-// export const logout = asyncHandler(async (req: Request, res: Response) => {
-//     const { email } = req.user;
+export const logout = asyncHandler(async (req: Request, res: Response) => {
+    const { userId } = req.user;
+    const refreshToken = req.cookies.refreshToken;
+    if (!refreshToken) {
+        throw new ApiError(401, "No refresh token");
+    }
+    await prisma.refreshToken.deleteMany({
+        where: {
+            token: refreshToken
+        }
+        });
+    return res.clearCookie("refreshToken", options).status(200)
+        .json(
+            new ApiResponse(200,{},"Successfully Logged Out")
+        )
 
-// })
+})
+export const logoutAllDevices = asyncHandler(async(req: Request, res: Response)=>{
+    const {userId} = req.user
+    await prisma.refreshToken.deleteMany({
+        where: {
+            userId,
+        }
+    })
+    return res.clearCookie("refreshToken", options).status(200)
+        .json(
+            new ApiResponse(200,{},"Successfully Logged Out")
+    )
+})
 
 // export const refresh = asyncHandler(async (req: Request, res: Response) => {
 
