@@ -40,13 +40,16 @@ model Queue {
   name        String
   admin       User        @relation("AdminQueues", fields: [adminId], references: [id])
   adminId     Int
-  queueUsers  QueueUser[]
+  queueUsers  QueueUser[] 
   maxActiveUsers   Int?
-  turnExpiryMinutes    Int?        
+  turnExpiryMinutes    Int?  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+     
 }
 model QueueUser {
   id        Int    @id @default(autoincrement())
-  queue     Queue  @relation(fields: [queueId], references: [id])
+  queue     Queue  @relation(fields: [queueId], references: [id], onDelete: Cascade )
   queueId   Int
   user      User   @relation(fields: [userId], references: [id])
   userId    Int
@@ -58,6 +61,7 @@ model QueueUser {
   expiresAt DateTime? 
   updatedAt  DateTime   @updatedAt
 
+  @@unique([userId, queueId])
   @@unique([queueId, position])
 }
 

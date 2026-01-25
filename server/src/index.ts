@@ -14,16 +14,16 @@ app.use(express.json());
 app.use(cookieParser());
 
 //routes
-app.use("/api/v1/queues", queueRouter)
 app.use("/api/v1/auth", authRouter)
+app.use("/api/v1/queues", queueRouter)
 
 //global error handler
 app.use(globalErrorHandler)
 
-app.get("/jwtTest", jwtAuth, ()=>{
+app.get("/jwtTest", jwtAuth, () => {
     console.log("successful")
     return
-} )
+})
 
 app.listen(PORT, () => {
     console.log(`Server running on port: ${PORT}`);

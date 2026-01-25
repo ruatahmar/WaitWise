@@ -1,9 +1,9 @@
-class ApiResponse {
+class ApiResponse<T = unknown> {
   constructor(
     public statusCode: number,
-    public data: Record<string, unknown>,
+    public data: T,
     public message: string = "Success",
-  ) {}
+  ) { }
 }
 
 export default ApiResponse;
