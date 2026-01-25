@@ -4,7 +4,7 @@ import { prisma } from "../../db/prisma.js";
 import ApiError from "../../utils/apiError.js";
 import bcrypt from "bcrypt"
 import ms from "ms"
-import { generateAccessToken, generateRefreshToken, TokenPayload } from "../../utils/tokens.js";
+import { generateAccessToken, generateRefreshToken, TokenPayload, REFRESH_TOKEN_EXPIRY_MS } from "../../utils/tokens.js";
 import ApiResponse from "../../utils/apiResponse.js";
 
 const hashPassword = (password: string): Promise<string> => {
@@ -19,7 +19,8 @@ const generateTokens = (data: TokenPayload) => {
 const options = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "lax" as const
+    sameSite: "lax" as const,
+    maxAge: REFRESH_TOKEN_EXPIRY_MS
 }
 
 export const login = asyncHandler(async (req: Request, res: Response) => {
@@ -44,7 +45,7 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
         data: {
             userId: user.id,
             token: refreshToken,
-            expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+            expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS)
         }
     })
     return res.status(200).cookie("refreshToken", refreshToken, options)
@@ -81,7 +82,7 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
         data: {
             userId: user.id,
             token: refreshToken,
-            expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+            expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS)
         }
     })
     return res.status(201).cookie("refreshToken", refreshToken, options)
@@ -120,6 +121,28 @@ export const logoutAllDevices = asyncHandler(async(req: Request, res: Response)=
     )
 })
 
-// export const refresh = asyncHandler(async (req: Request, res: Response) => {
-
-// })
+export const refresh = asyncHandler(async (req: Request, res: Response) => {
+    const refreshToken = req.cookies.refreshToken
+    const tokenRecord = await prisma.refreshToken.findFirst({
+        where: {
+            token: refreshToken,
+            revoked: false,
+            expiresAt: { gt: new Date() }
+        }
+    })
+    if(!tokenRecord) throw new ApiError(401,"Unauthorized")
+    const userId = tokenRecord.userId 
+    
+    const {accessToken, refreshToken: newRefreshToken} = generateTokens({userId})
+    await prisma.refreshToken.update({
+        where: { id: tokenRecord.id },
+        data: {
+            token: newRefreshToken,
+            expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS),
+        }
+    });
+    return res.status(200).cookie("refreshToken",newRefreshToken,options)
+    .json(
+        new ApiResponse(200,{accessToken},"Token refreshed")
+    )
+})  

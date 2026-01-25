@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { login, logout, logoutAllDevices, register } from "../../controllers/v1/auth.controller.js";
+import { login, logout, logoutAllDevices, refresh, register } from "../../controllers/v1/auth.controller.js";
 import { jwtAuth } from "../../middleware/jwtAuth.js";
 
 
@@ -9,5 +9,6 @@ app.post("/login", login);
 app.post("/register", register)
 app.post("/logout", jwtAuth, logout)
 app.post("/logoutAll", jwtAuth, logoutAllDevices)
+app.post("/refresh", refresh)
 
 export default app;

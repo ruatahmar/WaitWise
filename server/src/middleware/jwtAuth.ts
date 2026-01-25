@@ -11,8 +11,8 @@ export const jwtAuth = (req: Request, res: Response, next: NextFunction) => {
     if (!token) {
         return res.status(401).json(new ApiResponse(401, {}, "Unauthorized: No token provided"));
     }
-    console.log(token)   
     const payload = verifyToken(token)
+    console.log(payload)   
     req.user = payload
     console.log("req.user: ", req.user)
     next()
