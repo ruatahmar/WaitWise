@@ -9,6 +9,13 @@ export const createQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user;
     const { name, maxActiveUsers, tokenTTL } = req.body;
 
+    //invariant check
+    if (maxActiveUsers != null && maxActiveUsers <= 0) {
+        throw new ApiError(400, "maxActiveUsers must be > 0");
+    }
+    if (tokenTTL != null && tokenTTL < 0) {
+        throw new ApiError(400, "turnExpiryMinutes must be > 0");
+    }
     const exist = await prisma.queue.findFirst({
         where: {
             adminId: userId,
