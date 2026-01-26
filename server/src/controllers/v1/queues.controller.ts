@@ -5,13 +5,15 @@ import asyncHandler from "../../utils/asyncHandler.js";
 import { Request, Response } from "express";
 import ApiResponse from "../../utils/apiResponse.js";
 
+
+//CRUD
 export const createQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user;
-    const { name, maxActiveUsers, tokenTTL } = req.body;
+    const { name, maxSize, servingSlots, tokenTTL } = req.body;
 
     //invariant check
-    if (maxActiveUsers != null && maxActiveUsers <= 0) {
-        throw new ApiError(400, "maxActiveUsers must be > 0");
+    if (maxSize != null && maxSize <= 0) {
+        throw new ApiError(400, "maxSize must be > 0");
     }
     if (tokenTTL != null && tokenTTL < 0) {
         throw new ApiError(400, "turnExpiryMinutes must be > 0");
@@ -27,7 +29,8 @@ export const createQueue = asyncHandler(async (req: Request, res: Response) => {
         data: {
             name,
             adminId: userId,
-            maxActiveUsers,
+            maxSize,
+            serviceSlots: servingSlots,
             turnExpiryMinutes: tokenTTL
         }
     })
@@ -74,12 +77,13 @@ export const getSpecificQueue = asyncHandler(async (req: Request, res: Response)
 export const updateQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
-    const { name, maxActiveUsers, tokenTTL } = req.body;
+    const { name, maxSize, serviceSlots, tokenTTL } = req.body;
     const updated = await prisma.queue.updateMany({
         where: { id: Number(queueId), adminId: userId },
         data: {
             name,
-            maxActiveUsers,
+            maxSize,
+            serviceSlots,
             turnExpiryMinutes: tokenTTL
         }
     });
@@ -107,6 +111,7 @@ export const deleteQueue = asyncHandler(async (req: Request, res: Response) => {
         )
 });
 
+//VIP
 export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
@@ -118,13 +123,13 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
     })
     if (!queueToJoin) throw new ApiError(404, "This queue does not exist.");
 
+
     const alreadyJoined = await prisma.queueUser.findFirst({
         where: {
             queueId: Number(queueId),
             userId
         }
     });
-
     if (alreadyJoined) {
         throw new ApiError(400, "You already joined this queue.");
     }
@@ -132,7 +137,7 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
     const activeUsersCount = await prisma.queueUser.count({
         where: { queueId: Number(queueId) }
     });
-    const maxUsers = queueToJoin.maxActiveUsers ?? Infinity;
+    const maxUsers = queueToJoin.maxSize ?? Infinity;
     if (activeUsersCount >= maxUsers) throw new ApiError(400, "Queue full.");
 
 
@@ -147,6 +152,22 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
     });
 
     return res.status(201).json(new ApiResponse(201, join, "Joined queue"));
+});
+
+export const advanceQueue = asyncHandler(async (req: Request, res: Response) => {
+    const { userId } = req.user
+    const { queueId } = req.params
+    const completedUsers = await prisma.queueUser.updateMany({
+        where: {
+            status: "SERVING",
+            queueId: Number(queueId)
+        },
+        data: {
+            status: ""
+        }
+    })
+
+
 });
 
 export const leaveQueue = asyncHandler(async (req: Request, res: Response) => {
@@ -171,7 +192,21 @@ export const getQueueStatus = asyncHandler(async (req: Request, res: Response) =
                 userId,
                 queueId: Number(queueId)
             }
-        }
+        },
+        select: {
+            status: true,
+            position: true,
+            token: true,
+            servedAt: true,
+            expiresAt: true,
+            queue: {
+                select: {
+                    name: true,
+                    maxActiveUsers: true,
+                    turnExpiryMinutes: true
+                }
+            },
+        },
     })
     if (!ticket) {
         throw new ApiError(404, "You are not in this queue.");

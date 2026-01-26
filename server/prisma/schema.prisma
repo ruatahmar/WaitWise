@@ -13,6 +13,7 @@ enum QueueStatus {
   LATE
   MISSED
   CANCELLED
+  COMPLETED
 }
 
 model User {
@@ -20,6 +21,7 @@ model User {
   name      String
   email     String    @unique
   password  String
+
   adminQueues Queue[] @relation("AdminQueues")
   queueUsers QueueUser[] 
   refreshTokens RefreshToken[]
@@ -28,6 +30,7 @@ model RefreshToken {
   id        String   @id @default(cuid())
   user      User     @relation(fields: [userId], references: [id])
   userId    Int
+
   token     String
   expiresAt DateTime
   createdAt DateTime @default(now())
@@ -40,11 +43,15 @@ model Queue {
   name        String
   admin       User        @relation("AdminQueues", fields: [adminId], references: [id])
   adminId     Int
+
   queueUsers  QueueUser[] 
-  maxActiveUsers   Int?
-  turnExpiryMinutes    Int?  
+  serviceSlots   Int       @default(1)
+  maxSize      Int?
+  turnExpiryMinutes    Int @default(5)  
   createdAt        DateTime @default(now())
   updatedAt        DateTime @default(now()) @updatedAt
+  
+  @@unique([adminId, name])
      
 }
 model QueueUser {
@@ -53,15 +60,19 @@ model QueueUser {
   queueId   Int
   user      User   @relation(fields: [userId], references: [id])
   userId    Int
+
   joinedAt  DateTime @default(now())
   status    QueueStatus @default(WAITING)
-  position  Int
-  token      String?    @unique
+  priorityBoost  Int    @default(0)
+
+  token      String    
   servedAt   DateTime?
-  expiresAt DateTime? 
+  expiresAt  DateTime? 
   updatedAt  DateTime   @updatedAt
 
   @@unique([userId, queueId])
-  @@unique([queueId, position])
+  @@unique([queueId, token])
+  @@index([queueId, status])
+  @@index([queueId, status, priorityBoost, joinedAt])
 }
 
