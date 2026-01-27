@@ -1,11 +1,39 @@
 import { v4 as uuidv4 } from "uuid";
+import ms from "ms";
 import { prisma } from "../../db/prisma.js";
 import ApiError from "../../utils/apiError.js";
 import asyncHandler from "../../utils/asyncHandler.js";
 import { Request, Response } from "express";
 import ApiResponse from "../../utils/apiResponse.js";
+import { QueueStatus } from "../../../generated/prisma/enums.js";
+import { Prisma } from "../../../generated/prisma/client.js";
+import { withTransaction } from "../../utils/transaction.js";
 
+async function promoteIfAvailableSlot(tx: Prisma.TransactionClient, queueId: number, serviceSlots: number): Promise<number> {
+    const servingCount = await tx.queueUser.count({
+        where: { queueId, status: QueueStatus.SERVING }
+    });
+    const openSlots = serviceSlots - servingCount;
+    if (openSlots <= 0) return 0;
 
+    const candidates = await tx.queueUser.findMany({
+        where: {
+            queueId,
+            status: QueueStatus.WAITING
+        },
+        orderBy: [
+            { priorityBoost: "desc" },
+            { joinedAt: "asc" }
+        ],
+        take: openSlots
+    });
+    if (candidates.length === 0) return 0;
+    await tx.queueUser.updateMany({
+        where: { id: { in: candidates.map(c => c.id) } },
+        data: { status: QueueStatus.SERVING, servedAt: new Date() }
+    });
+    return candidates.length
+}
 //CRUD
 export const createQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user;
@@ -78,21 +106,28 @@ export const updateQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
     const { name, maxSize, serviceSlots, tokenTTL } = req.body;
-    const updated = await prisma.queue.updateMany({
-        where: { id: Number(queueId), adminId: userId },
-        data: {
-            name,
-            maxSize,
-            serviceSlots,
-            turnExpiryMinutes: tokenTTL
+
+    const result = await withTransaction(async (tx) => {
+        const updated = await tx.queue.updateMany({
+            where: { id: Number(queueId), adminId: userId },
+            data: {
+                name,
+                maxSize,
+                serviceSlots,
+                turnExpiryMinutes: tokenTTL
+            }
+        });
+
+        if (updated.count === 0) throw new ApiError(404, "Queue does not exist");
+        if (serviceSlots !== undefined && serviceSlots !== null) {
+            const promoted = await promoteIfAvailableSlot(tx, Number(queueId), serviceSlots)
+            return { updated, promoted }
         }
+
+        return { updated, promoted: false }
     });
 
-    if (updated.count === 0) throw new ApiError(404, "Queue does not exist");
-    return res.status(200)
-        .json(
-            new ApiResponse(200, updated, "Queue updated")
-        );
+    return res.status(200).json(new ApiResponse(200, result, "Queue updated"));
 
 });
 
@@ -112,111 +147,382 @@ export const deleteQueue = asyncHandler(async (req: Request, res: Response) => {
 });
 
 //VIP
+
 export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
 
-    const queueToJoin = await prisma.queue.findUnique({
-        where: {
-            id: Number(queueId),
+    const result = await withTransaction(async (tx) => {
+        //queue existance check
+        const queue = await tx.queue.findUnique({
+            where: { id: Number(queueId) }
+        });
+        if (!queue) throw new ApiError(404, "Queue not found");
+
+        //maxSize check
+        const activeCount = await tx.queueUser.count({
+            where: {
+                queueId: queue.id,
+                status: { in: [QueueStatus.WAITING, QueueStatus.SERVING, QueueStatus.LATE] }
+            }
+        });
+        if (queue.maxSize !== null && activeCount >= queue.maxSize) {
+            throw new ApiError(400, "Queue full");
         }
-    })
-    if (!queueToJoin) throw new ApiError(404, "This queue does not exist.");
 
 
-    const alreadyJoined = await prisma.queueUser.findFirst({
-        where: {
-            queueId: Number(queueId),
-            userId
+        const existing = await tx.queueUser.findUnique({
+            where: {
+                userId_queueId: {
+                    userId,
+                    queueId: queue.id
+                }
+            }
+        });
+        if (existing) {
+            throw new ApiError(400, "Already in queue");
         }
-    });
-    if (alreadyJoined) {
-        throw new ApiError(400, "You already joined this queue.");
-    }
 
-    const activeUsersCount = await prisma.queueUser.count({
-        where: { queueId: Number(queueId) }
-    });
-    const maxUsers = queueToJoin.maxSize ?? Infinity;
-    if (activeUsersCount >= maxUsers) throw new ApiError(400, "Queue full.");
+        const token = uuidv4();
+        //join
+        const newUser = await tx.queueUser.create({
+            data: {
+                queueId: queue.id,
+                userId,
+                token,
+                status: QueueStatus.WAITING
+            }
+        })
+        await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
 
-
-    const token = uuidv4()
-    const join = await prisma.queueUser.create({
-        data: {
-            queueId: Number(queueId), // important
-            userId,
-            position: activeUsersCount + 1,
-            token
-        }
+        return newUser;
     });
 
-    return res.status(201).json(new ApiResponse(201, join, "Joined queue"));
+    return res.status(201).json(new ApiResponse(201, result, "Joined queue"));
 });
 
-export const advanceQueue = asyncHandler(async (req: Request, res: Response) => {
+export const markComplete = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
-    const { queueId } = req.params
-    const completedUsers = await prisma.queueUser.updateMany({
-        where: {
-            status: "SERVING",
-            queueId: Number(queueId)
-        },
-        data: {
-            status: ""
+    const { queueId, targetUserId } = req.params
+
+    const result = await withTransaction(async (tx) => {
+
+        const queue = await tx.queue.findFirst({
+            where: {
+                id: Number(queueId),
+                adminId: userId
+            }
+        })
+        if (!queue) throw new ApiError(404, "Queue does not exist")
+
+        const selectedUser = await tx.queueUser.findUnique({
+            where: {
+                userId_queueId: {
+                    userId: Number(targetUserId),
+                    queueId: Number(queueId)
+                }
+            }
+        })
+        if (!selectedUser) {
+            throw new ApiError(400, "Selected user is not in line")
         }
+        if (selectedUser.status !== QueueStatus.SERVING) {
+            throw new ApiError(400, "User is not being served")
+        }
+        await tx.queueUser.update({
+            where: {
+                userId_queueId: {
+                    userId: Number(targetUserId),
+                    queueId: Number(queueId)
+                }
+            },
+            data: {
+                status: QueueStatus.COMPLETED
+            }
+        })
+
+
+        await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
+        return selectedUser
     })
 
+    return res.status(200)
+        .json(
+            new ApiResponse(200, result, "Status updated.")
+        )
 
+});
+
+export const markLate = asyncHandler(async (req: Request, res: Response) => {
+    const { userId } = req.user
+    const { queueId, targetUserId } = req.params
+
+
+    const result = await withTransaction(async (tx) => {
+
+        const queue = await tx.queue.findFirst({
+            where: {
+                id: Number(queueId),
+                adminId: userId
+            }
+        })
+        if (!queue) throw new ApiError(404, "Queue does not exist")
+
+        const selectedUser = await tx.queueUser.findUnique({
+            where: {
+                userId_queueId: {
+                    userId: Number(targetUserId),
+                    queueId: Number(queueId)
+                }
+            }
+        })
+        if (!selectedUser) {
+            throw new ApiError(400, "Selected user is not in line")
+        }
+        if (selectedUser.status !== QueueStatus.SERVING) {
+            throw new ApiError(400, "User is not being served")
+        }
+        await tx.queueUser.update({
+            where: {
+                userId_queueId: {
+                    userId: Number(targetUserId),
+                    queueId: Number(queueId)
+                }
+            },
+            data: {
+                status: QueueStatus.LATE,
+                expiresAt: new Date(Date.now() + ms(queue.turnExpiryMinutes))
+            }
+
+        })
+
+        await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
+        return selectedUser
+    })
+
+    return res.status(200)
+        .json(
+            new ApiResponse(200, result, "Status updated.")
+        )
+});
+
+export const removeQueueUser = asyncHandler(async (req: Request, res: Response) => {
+    const { userId } = req.user
+    const { queueId, targetUserId } = req.params
+
+    const result = await withTransaction(async (tx) => {
+
+        const queue = await tx.queue.findFirst({
+            where: {
+                id: Number(queueId),
+                adminId: userId
+            }
+        })
+        if (!queue) throw new ApiError(404, "Queue does not exist")
+
+        const selectedUser = await tx.queueUser.findUnique({
+            where: {
+                userId_queueId: {
+                    userId: Number(targetUserId),
+                    queueId: Number(queueId)
+                }
+            }
+        })
+        if (!selectedUser) {
+            throw new ApiError(400, "Selected user is not in line")
+        }
+        if (selectedUser.status === QueueStatus.COMPLETED) {
+            throw new ApiError(400, "User already completed")
+        }
+        const freedSlot = selectedUser.status === QueueStatus.SERVING
+        const updatedUser = await tx.queueUser.update({
+            where: {
+                userId_queueId: {
+                    userId: Number(targetUserId),
+                    queueId: Number(queueId)
+                }
+            },
+            data: {
+                status: QueueStatus.CANCELLED
+            }
+        })
+        //prevents extra db work
+        if (freedSlot) {
+            await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
+        }
+        return updatedUser
+    })
+
+    return res.status(200)
+        .json(
+            new ApiResponse(200, result, "Status updated")
+        )
 });
 
 export const leaveQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
-    const ticket = await prisma.queueUser.delete({
-        where: {
-            userId_queueId: {
-                userId,
-                queueId: Number(queueId)
+
+    const result = await withTransaction(async (tx) => {
+        const queue = await tx.queue.findFirst({
+            where: {
+                id: Number(queueId),
             }
+        })
+        if (!queue) throw new ApiError(404, "Queue does not exist")
+
+        const selectedUser = await tx.queueUser.findUnique({
+            where: {
+                userId_queueId: {
+                    userId,
+                    queueId: Number(queueId)
+                }
+            }
+        })
+        if (!selectedUser) {
+            throw new ApiError(400, "Selected user is not in line")
         }
+        if (selectedUser.status === QueueStatus.COMPLETED) {
+            throw new ApiError(400, "User already completed")
+        }
+        const freedSlot = selectedUser.status === QueueStatus.SERVING
+        const updatedUser = await tx.queueUser.update({
+            where: {
+                userId_queueId: {
+                    userId,
+                    queueId: Number(queueId)
+                }
+            },
+            data: {
+                status: QueueStatus.CANCELLED
+            }
+        })
+        //prevents extra db work
+        if (freedSlot) {
+            await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
+        }
+        return updatedUser
     })
+
+    return res.status(200)
+        .json(
+            new ApiResponse(200, result, "Status updated")
+        )
 });
+
+
+export const lateRejoin = asyncHandler(async (req: Request, res: Response) => {
+    const { userId } = req.user
+    const { queueId } = req.params
+    const rejoinStatus = await withTransaction(async (tx) => {
+        const queue = await tx.queue.findFirst({
+            where: {
+                id: Number(queueId),
+            }
+        })
+        if (!queue) throw new ApiError(404, "Queue does not exist")
+
+        const selectedUser = await tx.queueUser.findUnique({
+            where: {
+                userId_queueId: {
+                    userId,
+                    queueId: Number(queueId)
+                }
+            }
+        })
+        if (!selectedUser) throw new ApiError(400, "User is not in line");
+        if (selectedUser.status !== QueueStatus.LATE) throw new ApiError(400, "User is not late");
+        if (!selectedUser.expiresAt) throw new ApiError(500, "Invariant violation: LATE user has no expiresAt");
+
+        const now = new Date(Date.now())
+        if (now > selectedUser.expiresAt) {
+            await tx.queueUser.update({
+                where: {
+                    userId_queueId: {
+                        userId,
+                        queueId: Number(queueId)
+                    }
+                },
+                data: {
+                    status: QueueStatus.MISSED
+                }
+            })
+            return false
+        }
+        await tx.queueUser.update({
+            where: {
+                userId_queueId: {
+                    userId,
+                    queueId: Number(queueId)
+                }
+            },
+            data: {
+                status: QueueStatus.WAITING,
+                priorityBoost: 1,
+                expiresAt: null
+            }
+        })
+        return true
+    });
+    const message = rejoinStatus ? "Successfully rejoined" : "Late please rejoin"
+    return res.status(200)
+        .json(
+            new ApiResponse(200, {}, message)
+        )
+
+});
+
 
 export const getQueueStatus = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
-    const ticket = await prisma.queueUser.findUnique({
-        where: {
-            userId_queueId: {
-                userId,
-                queueId: Number(queueId)
-            }
-        },
-        select: {
-            status: true,
-            position: true,
-            token: true,
-            servedAt: true,
-            expiresAt: true,
-            queue: {
-                select: {
-                    name: true,
-                    maxActiveUsers: true,
-                    turnExpiryMinutes: true
+    const result = await withTransaction(async (tx) => {
+        const ticket = await tx.queueUser.findUnique({
+            where: {
+                userId_queueId: {
+                    userId,
+                    queueId: Number(queueId)
                 }
             },
-        },
+            select: {
+                status: true,
+                token: true,
+                servedAt: true,
+                expiresAt: true,
+                priorityBoost: true,
+                joinedAt: true,
+                queue: {
+                    select: {
+                        name: true,
+                        serviceSlots: true,
+                        turnExpiryMinutes: true
+                    }
+                },
+            },
+        })
+        if (!ticket) throw new ApiError(404, "You are not in this queue.");
+        if (ticket.status !== QueueStatus.WAITING) {
+            return { ...ticket, position: null }
+        }
+        const position = await tx.queueUser.count({
+            where: {
+                queueId: Number(queueId),
+                status: QueueStatus.WAITING,
+                OR: [
+                    { priorityBoost: { gt: ticket.priorityBoost } },
+                    {
+                        priorityBoost: ticket.priorityBoost,
+                        joinedAt: { lt: ticket.joinedAt }
+                    }
+                ]
+            }
+        }) + 1;
+        return { ...ticket, position }
+
     })
-    if (!ticket) {
-        throw new ApiError(404, "You are not in this queue.");
-    }
     return res.status(200)
         .json(
-            new ApiResponse(200, ticket, "Queue Status Returned")
+            new ApiResponse(200, result, "Queue Status Returned")
         )
 });
 
-//GET /queues/:queueId/users
-//GET /queues/:queueId/serving
-//GET /queues/:queueId/length

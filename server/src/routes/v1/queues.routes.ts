@@ -1,20 +1,25 @@
 import { Router } from "express";
-import { createQueue, deleteQueue, getQueues, getQueueStatus, getSpecificQueue, joinQueue, leaveQueue, markComplete, markLate, updateQueue } from "../../controllers/v1/queues.controller.js";
+import { createQueue, deleteQueue, getQueues, getQueueStatus, getSpecificQueue, joinQueue, lateRejoin, leaveQueue, markComplete, markLate, removeQueueUser, updateQueue } from "../../controllers/v1/queues.controller.js";
 import { jwtAuth } from "../../middleware/jwtAuth.js";
 
 const app = Router()
 
+//CRUD endpoints
 app.get("/", jwtAuth, getQueues)
+app.post("/", jwtAuth, createQueue)
 app.get("/:queueId", jwtAuth, getSpecificQueue)
-app.post("/create", jwtAuth, createQueue)
 app.put("/:queueId", jwtAuth, updateQueue)
 app.delete("/:queueId", jwtAuth, deleteQueue)
 
+//User endpoints
 app.post("/:queueId/join", jwtAuth, joinQueue)
-app.post("/:queueId/serving/complete", jwtAuth, markComplete)
-app.post("/:queueId/serving/late", jwtAuth, markLate)
-// POST /queues/{id}/late/{queueUserId}/rejoin
 app.post("/:queueId/leave", jwtAuth, leaveQueue)
 app.get("/:queueId/status", jwtAuth, getQueueStatus)
+app.post("/:queueId/rejoin", jwtAuth, lateRejoin)
+
+//Admin endpoints
+app.post("/:queueId/users/:targetUserId/complete", jwtAuth, markComplete)
+app.post("/:queueId/users/:targetUserId/late", jwtAuth, markLate)
+app.post("/:queueId/users/:targetUserId/remove", jwtAuth, removeQueueUser)
 
 export default app;

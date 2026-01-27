@@ -31,6 +31,7 @@ Invariants are rules that **must always hold true** in the system, regardless of
 - A Queue must have:
   - `maxActiveUsers > 0`
   - `turnExpiryMinutes > 0`
+  <!-- this is implemented at database level -->
 
 ---
 
@@ -177,3 +178,20 @@ Violations must be prevented using **transactions and/or locking**.
 > ## If an invariant is ever violated, the system is broken — even if no error is thrown.
 
 All future features must be designed **around these invariants**, not the other way around.
+
+# new
+
+- A LATE user should NOT block the queue.
+  WAITING
+  ↓
+  SERVING (doctor calls next)
+  ↓ (no show)
+  LATE (grace countdown starts)
+  ↓
+  MISSED
+- LATE always has expiry
+  ALLOWED
+- Multiple LATE users
+- Queue advancing while LATE users exist
+  status === LATE → expiresAt IS NOT NULL
+  status !== LATE → expiresAt IS NULL
