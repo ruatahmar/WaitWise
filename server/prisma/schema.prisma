@@ -11,6 +11,7 @@ enum QueueStatus {
   WAITING
   SERVING
   LATE
+  
   MISSED
   CANCELLED
   COMPLETED

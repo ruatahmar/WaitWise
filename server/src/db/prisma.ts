@@ -9,10 +9,5 @@ const prisma = new PrismaClient({ adapter })
 
 export { prisma }
 
-// enum QueueStatus {
-//   WAITING
-//   SERVING
-//   LATE
-//   MISSED
-//   CANCELLED
-// }
+
+
