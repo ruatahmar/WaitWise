@@ -91,5 +91,3 @@ Terminal states: **COMPLETED, CANCELLED, MISSED**
 - No user-facing request may rely on background repair
 
 ---
-
-_Last updated: V1 schema lock_
