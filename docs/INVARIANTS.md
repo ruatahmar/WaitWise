@@ -19,7 +19,7 @@ Invariants are rules that **must always hold true** in the system, regardless of
 
 ### 2.1 User
 
-- A User **may own multiple Queues**
+- A User **may own multiple Queues** with **unique names**
 - A User **may join multiple Queues**, but **only once per Queue**
 
 ---
@@ -46,6 +46,7 @@ A QueueUser must always be in **exactly one** of the following states:
 - `LATE`
 - `MISSED`
 - `CANCELLED`
+- `COMPLETED`
 
 The status must never be `NULL` and must never represent multiple states.
 
@@ -63,30 +64,9 @@ The status must never be `NULL` and must never represent multiple states.
 
 ## 3. State Transition Invariants
 
-QueueUser state transitions must follow a **strict state machine**.
-
-### Allowed Transitions
-
-```
-WAITING  -> SERVING
-WAITING  -> CANCELLED
-
-SERVING  -> LATE
-SERVING  -> COMPLETED (servedAt set, then removed or archived)
-
-LATE     -> SERVING
-LATE     -> MISSED
-```
-
-### Disallowed Transitions
-
-- `WAITING -> LATE`
-- `WAITING -> MISSED`
-- `MISSED -> SERVING`
-- Any transition **skipping SERVING**
-- Any backward transition not explicitly allowed
-
-If an invalid transition is attempted, the operation must fail.
+- QueueUser state transitions must follow a **strict state machine**.
+- Every state transition happens through the state machine
+- The state machine is the one source of truth
 
 ---
 
@@ -99,9 +79,15 @@ If an invalid transition is attempted, the operation must fail.
 
 ### 4.2 expiresAt
 
-- `expiresAt` must always be **greater than createdAt**
+- `expiresAt` **must be NULL** unless `status === LATE`
+- If `status === SERVING`, `servedAt` \*\*must NOT be NULL`
 - If the current time exceeds `expiresAt`:
-  - Status must eventually transition to `LATE` or `MISSED`
+- Status must eventually transition to `MISSED`
+
+### 4.3 priorityBoost
+
+- `priorityBoost` **must be 0** for normal users in the queue
+- `priorityBoost === 1` for late users who rejoin under grace time
 
 ---
 
@@ -112,7 +98,7 @@ If an invalid transition is attempted, the operation must fail.
 At any point in time:
 
 ```
-COUNT(QueueUsers WHERE status = 'SERVING') <= Queue.maxActiveUsers
+COUNT(QueueUsers WHERE status = 'SERVING') <= Queue.servingSlots
 ```
 
 This invariant must hold even under:
@@ -121,7 +107,7 @@ This invariant must hold even under:
 - Retries
 - Race conditions
 
-Violations must be prevented using **transactions and/or locking**.
+Violations must be prevented using **transactions and locking**.
 
 ---
 
@@ -129,6 +115,7 @@ Violations must be prevented using **transactions and/or locking**.
 
 - QueueUsers must be served in **join order**
 - No user may be served before all earlier WAITING users
+- Late users who rejoin within grace time are given a priorityboost
 
 ---
 
@@ -189,7 +176,6 @@ All future features must be designed **around these invariants**, not the other 
   LATE (grace countdown starts)
   ↓
   MISSED
-- LATE always has expiry
   ALLOWED
 - Multiple LATE users
 - Queue advancing while LATE users exist

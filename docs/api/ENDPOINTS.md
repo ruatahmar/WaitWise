@@ -26,8 +26,6 @@ PUT /api/v1/queues/:queueId
 DELETE /api/v1/queues/:queueId
 ```
 
----
-
 ### POST and PUT Endpoints require:
 
 **Request Body:**

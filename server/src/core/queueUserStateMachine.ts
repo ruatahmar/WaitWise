@@ -2,6 +2,8 @@ import { CANCELLED } from "node:dns";
 import { Prisma } from "../../generated/prisma/client.js";
 import { QueueStatus } from "../../generated/prisma/enums.js";
 import ApiError from "../utils/apiError.js";
+import { enqueueCheckLateExpiry } from "../jobs/lateExpiry.js";
+import { enqueuePromoteIfFree } from "../jobs/promoteIfFreeSlot.js";
 
 /**
  * QueueUser state transitions are centralized here to:
@@ -58,7 +60,7 @@ export interface TransitionContext {
 
 export async function transitionQueueUser(
     tx: Prisma.TransactionClient,
-    queueUserId: number,
+    userId: number,
     queueId: number,
     event: QueueUserEvent,
     ctx: TransitionContext,
@@ -66,7 +68,7 @@ export async function transitionQueueUser(
     const qu = await tx.queueUser.findUnique({
         where: {
             userId_queueId: {
-                userId: queueUserId,
+                userId,
                 queueId,
             },
         },
@@ -88,6 +90,7 @@ export async function transitionQueueUser(
         const now = ctx.now ?? new Date();
         updates.servedAt = now;
     }
+
     if (nextStatus === QueueStatus.LATE) {
         updates.expiresAt = await computeExpiry(qu.queueId, ctx, tx);
     }
@@ -103,18 +106,36 @@ export async function transitionQueueUser(
             updates.priorityBoost = 1
         }
     }
+    if (event === "SERVE" && ctx.actor !== "system") {
+        throw new ApiError(403, "Only system can promote users");
+    }
     //Update with guard
     const updated = await tx.queueUser.updateMany({
         where: {
-            userId: queueUserId,
+            userId,
             queueId,
             status: qu.status
         },
         data: updates,
     });
+
     console.log(updated);
     if (updated.count !== 1) {
         throw new ApiError(400, "State changed concurrently");
+    }
+    //background worker     
+    if (nextStatus === QueueStatus.LATE) {
+        const expiresAt = updates.expiresAt
+        const now = ctx.now ?? new Date()
+        const delayMs = Math.max(0, expiresAt.getTime() - now.getTime());
+
+        await enqueueCheckLateExpiry(
+            { userId: qu.id, queueId: qu.queueId },
+            delayMs
+        )
+    }
+    if (event === "MISSED" || event === "COMPLETE" || event === "LEAVE") {
+        await enqueuePromoteIfFree({ queueId: qu.queueId })
     }
     // await emitEvent(tx, qu.status, nextStatus, event)
 

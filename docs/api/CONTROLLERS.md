@@ -127,4 +127,11 @@ All state-changing operations **must be executed inside transactions** to guaran
 - select top waiting candidates by `priorityBoost` + `joinedAt`
 - update them to `SERVING`
 
+### State Transition Machine
+
+All state transitions **must be carried out throught the state transition machine**
+
+- This ensures only valid transitions.
+- This provides a central source of truth.
+
 ---
