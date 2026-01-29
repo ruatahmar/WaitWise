@@ -1,6 +1,14 @@
+import { CANCELLED } from "node:dns";
 import { Prisma } from "../../generated/prisma/client.js";
 import { QueueStatus } from "../../generated/prisma/enums.js";
 import ApiError from "../utils/apiError.js";
+
+/**
+ * QueueUser state transitions are centralized here to:
+ * - enforce invariants
+ * - prevent illegal state changes
+ * - guard against concurrent updates
+ */
 
 const transitions = {
     WAITING: {
@@ -19,9 +27,17 @@ const transitions = {
         MISSED: QueueStatus.MISSED,
         LEAVE: QueueStatus.CANCELLED,
     },
+
+    CANCELLED: {
+        REJOIN: QueueStatus.WAITING,
+    },
+
+    MISSED: {
+        REJOIN: QueueStatus.WAITING
+    }
 };
 
-//update this to be more dynamic
+//need future update to be more dynamic
 export type QueueUserEvent =
     | "SERVE"
     | "LEAVE"
@@ -33,7 +49,7 @@ export type QueueUserEvent =
 export interface TransitionContext {
     actor: "admin" | "system" | "user";
     reason?: string;
-    now?: Date; // injectable for tests
+    now?: Date;
     queue?: {
         id: number;
         turnExpiryMinutes: number;
@@ -92,7 +108,7 @@ export async function transitionQueueUser(
         where: {
             userId: queueUserId,
             queueId,
-            status: qu.status, // 👈 guard against races
+            status: qu.status
         },
         data: updates,
     });

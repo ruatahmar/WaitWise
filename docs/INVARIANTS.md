@@ -193,5 +193,3 @@ All future features must be designed **around these invariants**, not the other 
   ALLOWED
 - Multiple LATE users
 - Queue advancing while LATE users exist
-  status === LATE → expiresAt IS NOT NULL
-  status !== LATE → expiresAt IS NULL

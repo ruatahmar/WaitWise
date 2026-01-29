@@ -186,22 +186,34 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
             }
         });
         if (existing) {
-            throw new ApiError(400, "Already in queue");
-        }
-
-        const token = uuidv4();
-        //join
-        const newUser = await tx.queueUser.create({
-            data: {
-                queueId: queue.id,
-                userId,
-                token,
-                status: QueueStatus.WAITING
+            if (
+                existing.status === QueueStatus.CANCELLED ||
+                existing.status === QueueStatus.MISSED
+            ) {
+                await transitionQueueUser(
+                    tx,
+                    userId,
+                    queue.id,
+                    "REJOIN",
+                    { actor: "user" }
+                );
+            } else {
+                throw new ApiError(400, "Already in queue");
             }
-        })
+        } else {
+            // Fresh join
+            await tx.queueUser.create({
+                data: {
+                    queueId: queue.id,
+                    userId,
+                    token: uuidv4(),
+                    status: QueueStatus.WAITING,
+                },
+            });
+        }
         await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
 
-        return newUser;
+        return;
     });
 
     return res.status(201).json(new ApiResponse(201, result, "Joined queue"));

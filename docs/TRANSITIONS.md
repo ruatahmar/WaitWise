@@ -16,7 +16,7 @@ This table is the **source of truth**. Any transition not listed here is **inval
 - `COMPLETED` – Service finished successfully (terminal)
 - `CANCELLED` – User/admin removed the user (terminal)
 
-Terminal states: **COMPLETED, CANCELLED, MISSED**
+Terminal states: **COMPLETED**
 
 ---
 
@@ -34,16 +34,25 @@ Terminal states: **COMPLETED, CANCELLED, MISSED**
 | SERVING    | CANCELLED | Leave             | User   | —                        | Free service slot      |
 | WAITING    | CANCELLED | Remove            | Admin  | —                        | —                      |
 | SERVING    | CANCELLED | Remove            | Admin  | —                        | Free service slot      |
+| CANCALLED  | WAITING   | Rejoin            | User   | Queue open               | Update QueueUser entry |
+| MISSED     | WAITING   | Rejoin            | User   | Queue open               | Update QueueUser entry |
 
 ---
 
 ## Invalid Transitions (Must Reject)
 
-- `COMPLETED → *`
-- `CANCELLED → *`
-- `MISSED → *`
+<!-- maybe udpate to include all rejections -->
+
 - `WAITING → COMPLETED`
 - `WAITING → LATE`
+- `COMPLETED → *`
+- `CANCELLED → SERVING`
+- `CANCELLED → MISSED`
+- `CANCELLED → LATE`
+- `CANCELLED → COMPLETED`
+- `MISSED → SERVING`
+- `MISSED → LATE`
+- `MISSED → COMPLETED`
 - `LATE → SERVING`
 
 ---
@@ -67,14 +76,14 @@ Terminal states: **COMPLETED, CANCELLED, MISSED**
 
 ## Design Notes
 
-### MISSED State
+<!-- ### MISSED State
 
 - `MISSED` is treated as **terminal**
 - It may be:
   - eagerly written (cron / background job)
   - lazily derived at read-time using `expiresAt`
 
-- Even if lazily derived, the **logical state** is still MISSED
+- Even if lazily derived, the **logical state** is still MISSED -->
 
 ### Priority Boost
 
@@ -85,8 +94,12 @@ Terminal states: **COMPLETED, CANCELLED, MISSED**
 
 ## Enforcement Strategy
 
-- Controllers validate **allowed transition**
-- Transactions enforce **slot invariants**
+### State Transition Machine
+
+- All state transitions happen through the State Transition Machine
+- It becomes the one source of truth
+- It validates **allowed transition**
+- All state Transitions happen in a transaction to enforce **slot invariants**
 - Background workers may reconcile stale states
 - No user-facing request may rely on background repair
 
