@@ -10,7 +10,7 @@ import { Prisma } from "../../../generated/prisma/client.js";
 import { withTransaction } from "../../utils/transaction.js";
 import { transitionQueueUser } from "../../core/queueUserStateMachine.js";
 
-async function promoteIfAvailableSlot(tx: Prisma.TransactionClient, queueId: number, serviceSlots: number): Promise<number> {
+export async function promoteIfAvailableSlot(tx: Prisma.TransactionClient, queueId: number, serviceSlots: number): Promise<number> {
     const servingCount = await tx.queueUser.count({
         where: { queueId, status: QueueStatus.SERVING }
     });

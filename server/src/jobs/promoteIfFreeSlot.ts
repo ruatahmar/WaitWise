@@ -11,7 +11,14 @@ export async function enqueuePromoteIfFree(
         "promote-if-free-slot",
         payload,
         {
-            jobId: `promote-if-free-slot:${payload.queueId}`
+            attempts: 5,
+            backoff: {
+                type: "exponential",
+                delay: 5000
+            },
+            removeOnComplete: true,
+            removeOnFail: false,
+            jobId: `promote-if-free-slot-${payload.queueId}`
         }
     )
     console.log("Enqueue promoteIfFreeSlot", payload)

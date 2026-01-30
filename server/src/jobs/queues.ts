@@ -1,34 +1,42 @@
 
 import { Queue } from "bullmq";
 import { redisConnection } from "../infra/redis.js";
+import { QueueStatus } from "../../generated/prisma/enums.js";
+import { prisma } from "../db/prisma.js";
+import { enqueueCheckLateExpiry } from "./lateExpiry.js";
+
 
 export const lateExpiryQueue = new Queue("late-expiry", {
     connection: redisConnection,
-    defaultJobOptions: {
-        attempts: 5,
-        backoff: {
-            type: "exponential", //this means retries delay inscrease exponentially 
-            delay: 5000
-        },
-        removeOnComplete: true,
-        removeOnFail: false
-    }
 });
 
 export const promoteIfFreeQueue = new Queue("promote-if-free-slot", {
     connection: redisConnection,
-    defaultJobOptions: {
-        attempts: 5,
-        backoff: {
-            type: "exponential",
-            delay: 5000
-        },
-        removeOnComplete: true,
-        removeOnFail: false
-    }
 })
 
-export const lateExpirySafetyNetQueue = new Queue("late-expiry-safety-net", {
-    connection: redisConnection,
-}
-);
+setInterval(async () => {
+    const now = new Date()
+    const lateUsers = await prisma.queueUser.findMany({
+        where: {
+            status: QueueStatus.LATE,
+            expiresAt: {
+                lte: now, //less than or equal 
+            },
+        }
+    });
+    for (const qu of lateUsers) {
+        if (!qu.expiresAt || qu.expiresAt > now) continue
+        await enqueueCheckLateExpiry({ userId: qu.userId, queueId: qu.queueId }, 0);
+        console.log(`Safety net enqueued late-expiry job for ${qu.userId}`);
+    }
+}, 30_000);
+
+
+
+// new QueueScheduler("late-expiry", {
+//   connection: redisConnection,
+// });
+
+// new QueueScheduler("promote-if-free-slot", {
+//   connection: redisConnection,
+// });

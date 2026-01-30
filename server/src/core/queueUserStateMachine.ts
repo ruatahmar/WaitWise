@@ -75,14 +75,7 @@ export async function transitionQueueUser(
     });
     if (!qu) throw new ApiError(404, "User not found");
     //Validate transition
-    const stateTransitions = transitions[qu.status as keyof typeof transitions];
-    if (!stateTransitions || !(event in stateTransitions)) {
-        throw new ApiError(400, `Illegal transition ${qu.status} → ${event}`);
-    }
-
-    const nextStatus = stateTransitions[
-        event as keyof typeof stateTransitions
-    ] as QueueStatus;
+    const nextStatus = decideQueueUserTransition(qu.status, event)
 
     //Apply side effects
     const updates: any = { status: nextStatus };
@@ -97,7 +90,7 @@ export async function transitionQueueUser(
     if (qu.status === QueueStatus.LATE && nextStatus !== QueueStatus.LATE) {
         updates.expiresAt = null
     }
-    if (event === "REJOIN") {
+    if (qu.status === QueueStatus.LATE && event === "REJOIN") {
         if (!qu.expiresAt) throw new ApiError(500, "Invariant violation: LATE user has no expiresAt")
         if (checkIfMissed(qu.expiresAt, ctx.now)) {
             updates.status = QueueStatus.MISSED
@@ -118,28 +111,39 @@ export async function transitionQueueUser(
         },
         data: updates,
     });
-
-    console.log(updated);
+    console.log("Updates :", updates)
+    console.log("Updated Count :", updated);
     if (updated.count !== 1) {
         throw new ApiError(400, "State changed concurrently");
     }
     //background worker     
-    if (nextStatus === QueueStatus.LATE) {
+    if (event === "MARK_LATE") {
         const expiresAt = updates.expiresAt
         const now = ctx.now ?? new Date()
         const delayMs = Math.max(0, expiresAt.getTime() - now.getTime());
 
         await enqueueCheckLateExpiry(
-            { userId: qu.id, queueId: qu.queueId },
+            { userId: qu.userId, queueId: qu.queueId },
             delayMs
         )
     }
-    if (event === "MISSED" || event === "COMPLETE" || event === "LEAVE") {
+    if (event === "MISSED" || event === "COMPLETE" || event === "LEAVE" || event === "REJOIN") {
         await enqueuePromoteIfFree({ queueId: qu.queueId })
     }
     // await emitEvent(tx, qu.status, nextStatus, event)
 
     return { from: qu.status, to: nextStatus };
+}
+export function decideQueueUserTransition(
+    currentStatus: QueueStatus,
+    event: QueueUserEvent
+): QueueStatus {
+    const stateTransitions = transitions[currentStatus as keyof typeof transitions];
+    if (!stateTransitions || !(event in stateTransitions)) {
+        throw new Error(`Illegal transition ${currentStatus} → ${event}`);
+    }
+
+    return stateTransitions[event as keyof typeof stateTransitions];
 }
 
 function checkIfMissed(

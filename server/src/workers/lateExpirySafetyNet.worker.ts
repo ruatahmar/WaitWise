@@ -1,29 +1,28 @@
 import { QueueStatus } from "../../generated/prisma/enums.js";
-import { transitionQueueUser } from "../core/queueUserStateMachine.js";
 import { prisma } from "../db/prisma.js";
-import { Worker } from "bullmq";
-import { redisConnection } from "../infra/redis.js";
+import { enqueueCheckLateExpiry } from "../jobs/lateExpiry.js";
 
-export const lateExpirySafetyNetWorker = new Worker(
-    "late-expiry-safety-net",
-    async () => {
-        const now = new Date()
-        await prisma.$transaction(async (tx) => {
-            const queueUsers = await tx.queueUser.findMany({
+export function startLateExpirySafetyNet() {
+    console.log("[late-expiry-safety-net] worker ready")
+    setInterval(async () => {
+        try {
+
+            const now = new Date()
+            const lateUsers = await prisma.queueUser.findMany({
                 where: {
                     status: QueueStatus.LATE,
                     expiresAt: {
                         lte: now, //less than or equal 
                     },
+
                 }
-            })
-            for (const queueUser of queueUsers) {
-                if (!queueUser.expiresAt || queueUser.expiresAt > now) continue
-                await transitionQueueUser(tx, queueUser.userId, queueUser.queueId, "MISSED", { actor: "system", now })
+            });
+            for (const qu of lateUsers) {
+                await enqueueCheckLateExpiry({ userId: qu.userId, queueId: qu.queueId }, 0);
+                console.log(`Safety net enqueued late-expiry job for ${qu.userId}`);
             }
-        })
-    },
-    {
-        connection: redisConnection
-    }
-);
+        } catch (err) {
+            console.error("[late-expiry-safety-net] error", err);
+        }
+    }, 30_000);
+}

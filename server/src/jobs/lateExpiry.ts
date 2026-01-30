@@ -13,10 +13,17 @@ export async function enqueueCheckLateExpiry(
         "check-late-expiry",
         payload,
         {
+            attempts: 5,
+            backoff: {
+                type: "exponential", //this means retries delay inscrease exponentially 
+                delay: 5000
+            },
+            removeOnComplete: true,
+            removeOnFail: false,
             delay: delayMs,
-            jobId: `late-expiry:${payload.queueId}:${payload.userId}`
+            jobId: `late-expiry-${payload.queueId}-${payload.userId}`
         }
     )
-    console.log("Enqueue checkLateExpiry", payload, delayMs)
+    console.log("Enqueue checkLateExpiry", payload, 0)
 }
 

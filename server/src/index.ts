@@ -6,9 +6,6 @@ import queueRouter from "./routes/v1/queues.routes.js"
 import authRouter from "./routes/v1/auth.routes.js"
 import { jwtAuth } from "./middleware/jwtAuth.js";
 
-import "./workers/lateExpiry.worker.js";
-import { scheduleLateExpirySafetyNet } from "./jobs/scheduleSafetyNets.js";
-
 const PORT = Number(process.env.PORT) || 8000;
 
 const app = express();
@@ -27,7 +24,9 @@ app.get("/jwtTest", jwtAuth, () => {
     console.log("successful")
     return
 })
-await scheduleLateExpirySafetyNet();
+
+
+
 app.listen(PORT, () => {
     console.log(`Server running on port: ${PORT}`);
 });
