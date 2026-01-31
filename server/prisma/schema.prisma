@@ -45,10 +45,13 @@ model Queue {
   admin       User        @relation("AdminQueues", fields: [adminId], references: [id])
   adminId     Int
 
-  queueUsers  QueueUser[] 
   serviceSlots   Int       @default(1)
   maxSize      Int?
   turnExpiryMinutes    Int @default(5)  
+  
+  queueUsers  QueueUser[] 
+  queueEvents QueueEvents[]
+
   createdAt        DateTime @default(now())
   updatedAt        DateTime @default(now()) @updatedAt
   
@@ -65,8 +68,10 @@ model QueueUser {
   joinedAt  DateTime @default(now())
   status    QueueStatus @default(WAITING)
   priorityBoost  Int    @default(0)
-
   token      String    
+
+  queueEvents QueueEvents[]
+  
   servedAt   DateTime?
   expiresAt  DateTime? 
   updatedAt  DateTime   @updatedAt
@@ -75,5 +80,28 @@ model QueueUser {
   @@unique([queueId, token])
   @@index([queueId, status])
   @@index([queueId, status, priorityBoost, joinedAt])
+}
+
+enum QueueEventType {
+  QUEUEUSER_CREATED
+  QUEUEUSER_SERVED
+  QUEUEUSER_COMPLETED
+  QUEUEUSER_LEFT
+  QUEUEUSER_LATE
+  QUEUEUSER_REJOINED
+  QUEUEUSER_MISSED
+}
+
+model QueueEvents {
+  id            String @id @default(cuid())
+  queueId       Int
+  queue         Queue @relation(fields: [queueId], references: [id], onDelete: Cascade)
+  
+  queueUserID   Int?
+  queueUser     QueueUser? @relation(fields: [queueUserID], references: [id], onDelete: Cascade)
+  
+  type          QueueEventType
+  payload       Json?
+  createdAt     DateTime @default(now())
 }
 

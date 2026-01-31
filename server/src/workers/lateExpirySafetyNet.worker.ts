@@ -1,12 +1,11 @@
 import { QueueStatus } from "../../generated/prisma/enums.js";
-import { prisma } from "../db/prisma.js";
+import { prisma } from "../infra/db.js";
 import { enqueueCheckLateExpiry } from "../jobs/lateExpiry.js";
 
 export function startLateExpirySafetyNet() {
     console.log("[late-expiry-safety-net] worker ready")
     setInterval(async () => {
         try {
-
             const now = new Date()
             const lateUsers = await prisma.queueUser.findMany({
                 where: {

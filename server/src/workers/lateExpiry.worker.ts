@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { prisma } from "../db/prisma.js";
+import { prisma } from "../infra/db.js";
 import { QueueStatus } from "../../generated/prisma/enums.js";
 import { transitionQueueUser } from "../core/queueUserStateMachine.js";
 import { redisConnection } from "../infra/redis.js";

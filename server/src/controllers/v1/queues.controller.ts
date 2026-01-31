@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import ms from "ms";
-import { prisma } from "../../db/prisma.js";
+import { prisma } from "../../infra/db.js";
 import ApiError from "../../utils/apiError.js";
 import asyncHandler from "../../utils/asyncHandler.js";
 import { Request, Response } from "express";

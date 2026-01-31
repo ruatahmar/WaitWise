@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { prisma } from "../db/prisma.js";
+import { prisma } from "../infra/db.js";
 import { promoteIfAvailableSlot } from "../controllers/v1/queues.controller.js";
 import { redisConnection } from "../infra/redis.js";
 

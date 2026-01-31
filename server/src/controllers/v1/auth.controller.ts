@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import asyncHandler from "../../utils/asyncHandler.js";
-import { prisma } from "../../db/prisma.js";
+import { prisma } from "../../infra/db.js";
 import ApiError from "../../utils/apiError.js";
 import bcrypt from "bcrypt"
 import ms from "ms"
@@ -101,15 +101,15 @@ export const logout = asyncHandler(async (req: Request, res: Response) => {
         where: {
             token: refreshToken
         }
-        });
+    });
     return res.clearCookie("refreshToken", options).status(200)
         .json(
-            new ApiResponse(200,{},"Successfully Logged Out")
+            new ApiResponse(200, {}, "Successfully Logged Out")
         )
 
 })
-export const logoutAllDevices = asyncHandler(async(req: Request, res: Response)=>{
-    const {userId} = req.user
+export const logoutAllDevices = asyncHandler(async (req: Request, res: Response) => {
+    const { userId } = req.user
     await prisma.refreshToken.deleteMany({
         where: {
             userId,
@@ -117,8 +117,8 @@ export const logoutAllDevices = asyncHandler(async(req: Request, res: Response)=
     })
     return res.clearCookie("refreshToken", options).status(200)
         .json(
-            new ApiResponse(200,{},"Successfully Logged Out")
-    )
+            new ApiResponse(200, {}, "Successfully Logged Out")
+        )
 })
 
 export const refresh = asyncHandler(async (req: Request, res: Response) => {
@@ -130,10 +130,10 @@ export const refresh = asyncHandler(async (req: Request, res: Response) => {
             expiresAt: { gt: new Date() }
         }
     })
-    if(!tokenRecord) throw new ApiError(401,"Unauthorized")
-    const userId = tokenRecord.userId 
-    
-    const {accessToken, refreshToken: newRefreshToken} = generateTokens({userId})
+    if (!tokenRecord) throw new ApiError(401, "Unauthorized")
+    const userId = tokenRecord.userId
+
+    const { accessToken, refreshToken: newRefreshToken } = generateTokens({ userId })
     await prisma.refreshToken.update({
         where: { id: tokenRecord.id },
         data: {
@@ -141,8 +141,8 @@ export const refresh = asyncHandler(async (req: Request, res: Response) => {
             expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS),
         }
     });
-    return res.status(200).cookie("refreshToken",newRefreshToken,options)
-    .json(
-        new ApiResponse(200,{accessToken},"Token refreshed")
-    )
+    return res.status(200).cookie("refreshToken", newRefreshToken, options)
+        .json(
+            new ApiResponse(200, { accessToken }, "Token refreshed")
+        )
 })  
