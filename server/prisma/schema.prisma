@@ -97,8 +97,8 @@ model QueueEvents {
   queueId       Int
   queue         Queue @relation(fields: [queueId], references: [id], onDelete: Cascade)
   
-  queueUserID   Int?
-  queueUser     QueueUser? @relation(fields: [queueUserID], references: [id], onDelete: Cascade)
+  queueUserId   Int?
+  queueUser     QueueUser? @relation(fields: [queueUserId], references: [id], onDelete: Cascade)
   
   type          QueueEventType
   payload       Json?

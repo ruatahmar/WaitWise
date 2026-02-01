@@ -1,9 +1,10 @@
 import { CANCELLED } from "node:dns";
 import { Prisma } from "../../generated/prisma/client.js";
-import { QueueStatus } from "../../generated/prisma/enums.js";
+import { QueueEventType, QueueStatus } from "../../generated/prisma/enums.js";
 import ApiError from "../utils/apiError.js";
 import { enqueueCheckLateExpiry } from "../jobs/lateExpiry.js";
 import { enqueuePromoteIfFree } from "../jobs/promoteIfFreeSlot.js";
+import { logEvent } from "../utils/eventAudit.js";
 
 /**
  * QueueUser state transitions are centralized here to:
@@ -39,14 +40,16 @@ const transitions = {
     }
 };
 
-//need future update to be more dynamic
-export type QueueUserEvent =
-    | "SERVE"
-    | "LEAVE"
-    | "COMPLETE"
-    | "MARK_LATE"
-    | "REJOIN"
-    | "MISSED";
+const queueEventsMapper = {
+    SERVE: QueueEventType.QUEUEUSER_SERVED,
+    LEAVE: QueueEventType.QUEUEUSER_LEFT,
+    COMPLETE: QueueEventType.QUEUEUSER_COMPLETED,
+    MARK_LATE: QueueEventType.QUEUEUSER_LATE,
+    REJOIN: QueueEventType.QUEUEUSER_REJOINED,
+    MISSED: QueueEventType.QUEUEUSER_MISSED
+}
+export type QueueUserEvent = keyof typeof queueEventsMapper;
+
 
 export interface TransitionContext {
     actor: "admin" | "system" | "user";
@@ -105,7 +108,7 @@ export async function transitionQueueUser(
     //Update with guard
     const updated = await tx.queueUser.updateMany({
         where: {
-            userId,
+            userId: qu.userId,
             queueId,
             status: qu.status
         },
@@ -116,6 +119,17 @@ export async function transitionQueueUser(
     if (updated.count !== 1) {
         throw new ApiError(400, "State changed concurrently");
     }
+    await logEvent(
+        tx,
+        queueId,
+        queueEventsMapper[event],
+        {
+            actor: ctx.actor,
+            from: qu.status,
+            to: updates.nextStatus
+        },
+        qu.id
+    )
     //background worker     
     if (event === "MARK_LATE") {
         const expiresAt = updates.expiresAt
@@ -178,3 +192,4 @@ async function computeExpiry(
 // function emitEvent(tx, status, nextStatus, event) {
 
 // }
+

@@ -5,10 +5,11 @@ import ApiError from "../../utils/apiError.js";
 import asyncHandler from "../../utils/asyncHandler.js";
 import { Request, Response } from "express";
 import ApiResponse from "../../utils/apiResponse.js";
-import { QueueStatus } from "../../../generated/prisma/enums.js";
+import { QueueEventType, QueueStatus } from "../../../generated/prisma/enums.js";
 import { Prisma } from "../../../generated/prisma/client.js";
 import { withTransaction } from "../../utils/transaction.js";
 import { transitionQueueUser } from "../../core/queueUserStateMachine.js";
+import { logEvent } from "../../utils/eventAudit.js";
 
 export async function promoteIfAvailableSlot(tx: Prisma.TransactionClient, queueId: number, serviceSlots: number): Promise<number> {
     const servingCount = await tx.queueUser.count({
@@ -210,6 +211,14 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
                     status: QueueStatus.WAITING,
                 },
             });
+            await logEvent(
+                tx,
+                Number(queueId),
+                QueueEventType.QUEUEUSER_CREATED,
+                {
+                    actor: "user"
+                }
+            );
         }
         await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
 
