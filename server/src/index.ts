@@ -1,4 +1,7 @@
+import http from "http";
+import { Server } from "socket.io";
 import express from "express";
+import cors from "cors"
 import "dotenv/config";
 import cookieParser from "cookie-parser"
 import globalErrorHandler from "./middleware/globalErrorHandler.middleware.js";
@@ -10,6 +13,10 @@ const PORT = Number(process.env.PORT) || 8000;
 
 const app = express();
 
+app.use(cors({
+    origin: "http://localhost:5173",
+    credentials: true
+}))
 app.use(express.json());
 app.use(cookieParser());
 
@@ -25,8 +32,28 @@ app.get("/jwtTest", jwtAuth, () => {
     return
 })
 
+// const httpServer = http.createServer(app);
+
+// export const io = new Server(httpServer, {
+//     cors: {
+//         origin: "*", // lock this down later
+//     },
+// });
+// io.on("connection", (socket) => {
+//     console.log("Socket connected:", socket.id);
+// });
+
+// httpServer.listen(3000, () => {
+//     console.log("Server running");
+// });
 
 
-app.listen(PORT, () => {
-    console.log(`Server running on port: ${PORT}`);
+import { initSocket } from "./socket.js";
+
+const server = http.createServer(app);
+
+export const io = initSocket(server);
+
+server.listen(8080, () => {
+    console.log("server running on 8080");
 });

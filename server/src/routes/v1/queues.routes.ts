@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createQueue, deleteQueue, getQueues, getQueueStatus, getSpecificQueue, joinQueue, lateRejoin, leaveQueue, markComplete, markLate, removeQueueUser, updateQueue } from "../../controllers/v1/queues.controller.js";
+import { createQueue, deleteQueue, getAllQueueTickets, getQueues, getQueueStatus, getSpecificQueue, joinQueue, lateRejoin, leaveQueue, markComplete, markLate, removeQueueUser, updateQueue } from "../../controllers/v1/queues.controller.js";
 import { jwtAuth } from "../../middleware/jwtAuth.js";
 
 const app = Router()
@@ -7,6 +7,7 @@ const app = Router()
 //CRUD endpoints
 app.get("/", jwtAuth, getQueues)
 app.post("/", jwtAuth, createQueue)
+app.get("/tickets", jwtAuth, getAllQueueTickets);
 app.get("/:queueId", jwtAuth, getSpecificQueue)
 app.put("/:queueId", jwtAuth, updateQueue)
 app.delete("/:queueId", jwtAuth, deleteQueue)

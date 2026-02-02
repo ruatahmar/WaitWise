@@ -8,15 +8,16 @@ import ApiResponse from "../../utils/apiResponse.js";
 import { QueueEventType, QueueStatus } from "../../../generated/prisma/enums.js";
 import { Prisma } from "../../../generated/prisma/client.js";
 import { withTransaction } from "../../utils/transaction.js";
-import { transitionQueueUser } from "../../core/queueUserStateMachine.js";
-import { logEvent } from "../../utils/eventAudit.js";
+import { calculatePosition, transitionQueueUser } from "../../core/queueUserStateMachine.js";
+import { logEvent } from "../../core/events.js";
+import { io } from "../../index.js";
 
-export async function promoteIfAvailableSlot(tx: Prisma.TransactionClient, queueId: number, serviceSlots: number): Promise<number> {
+export async function promoteIfAvailableSlot(tx: Prisma.TransactionClient, queueId: number, serviceSlots: number): Promise<number[]> {
     const servingCount = await tx.queueUser.count({
         where: { queueId, status: QueueStatus.SERVING }
     });
     const openSlots = serviceSlots - servingCount;
-    if (openSlots <= 0) return 0;
+    if (openSlots <= 0) return [];
 
     const candidates = await tx.queueUser.findMany({
         where: {
@@ -29,16 +30,34 @@ export async function promoteIfAvailableSlot(tx: Prisma.TransactionClient, queue
         ],
         take: openSlots
     });
-    if (candidates.length === 0) return 0;
-    let promoted = 0;
+    if (candidates.length === 0) return [];
+    const promotedIds: number[] = [];
     for (const candidate of candidates) {
         const res = await transitionQueueUser(tx, candidate.userId, queueId, "SERVE", { actor: "system" })
-        if (res) {
-            promoted++;
-        }
-
+        if (res) promotedIds.push(res.queueUserId);
     }
-    return promoted;
+    return promotedIds;
+}
+
+function emitPromotion(queueUserId: number) {
+    io.to(`queueUser:${queueUserId}`).emit("queueUpdate", {
+        status: QueueStatus.SERVING,
+        position: 0,
+        priorityBoost: 0,
+    });
+}
+
+type TransitionResult = Awaited<ReturnType<typeof transitionQueueUser>>;
+
+function emitQueueUpdate(transition: TransitionResult, promotedIds: number[]) {
+    for (const id of promotedIds) emitPromotion(id);
+    if (!promotedIds.includes(transition.queueUserId)) {
+        io.to(`queueUser:${transition.queueUserId}`).emit("queueUpdate", {
+            status: transition.to,
+            position: transition.position,
+            priorityBoost: transition.priorityBoost,
+        });
+    }
 }
 
 //CRUD
@@ -52,6 +71,9 @@ export const createQueue = asyncHandler(async (req: Request, res: Response) => {
     }
     if (tokenTTL != null && tokenTTL < 0) {
         throw new ApiError(400, "turnExpiryMinutes must be > 0");
+    }
+    if (servingSlots != null && servingSlots < 0) {
+        throw new ApiError(400, "servingSlots must be > 0");
     }
     const exist = await prisma.queue.findFirst({
         where: {
@@ -159,7 +181,9 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
 
-    const result = await withTransaction(async (tx) => {
+
+
+    const { transition, promotedIds } = await withTransaction(async (tx): Promise<{ transition: TransitionResult, promotedIds: number[] }> => {
         //queue existance check
         const queue = await tx.queue.findUnique({
             where: { id: Number(queueId) }
@@ -186,24 +210,29 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
                 }
             }
         });
+        let transition: TransitionResult;
         if (existing) {
             if (
                 existing.status === QueueStatus.CANCELLED ||
                 existing.status === QueueStatus.MISSED
             ) {
-                await transitionQueueUser(
+                transition = await transitionQueueUser(
                     tx,
                     userId,
                     queue.id,
                     "REJOIN",
                     { actor: "user" }
                 );
+                // io.to(`queueUser:${result.queueUserId}`).emit("queueUpdate", {
+                //     status: result.to,
+                //     position: result.position,
+                // });
             } else {
                 throw new ApiError(400, "Already in queue");
             }
         } else {
             // Fresh join
-            await tx.queueUser.create({
+            const created = await tx.queueUser.create({
                 data: {
                     queueId: queue.id,
                     userId,
@@ -211,28 +240,38 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
                     status: QueueStatus.WAITING,
                 },
             });
+            const position = await calculatePosition(tx, created.queueId, created.joinedAt, created.priorityBoost)
             await logEvent(
                 tx,
                 Number(queueId),
                 QueueEventType.QUEUEUSER_CREATED,
                 {
-                    actor: "user"
-                }
+                    actor: "user",
+                    to: QueueStatus.WAITING
+                },
+                created.id
             );
+            transition = {
+                queueUserId: created.id,
+                from: QueueStatus.WAITING,
+                to: QueueStatus.WAITING,
+                position,
+                priorityBoost: 0,
+            } as TransitionResult;
         }
-        await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
+        const promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
 
-        return;
+        return { transition, promotedIds };
     });
-
-    return res.status(201).json(new ApiResponse(201, result, "Joined queue"));
+    emitQueueUpdate(transition, promotedIds)
+    return res.status(201).json(new ApiResponse(201, transition, "Joined queue"));
 });
 
 export const leaveQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
 
-    const result = await withTransaction(async (tx) => {
+    const { transition, promotedIds } = await withTransaction(async (tx) => {
         const queue = await tx.queue.findFirst({
             where: {
                 id: Number(queueId),
@@ -243,22 +282,24 @@ export const leaveQueue = asyncHandler(async (req: Request, res: Response) => {
         const transition = await transitionQueueUser(tx, Number(userId), Number(queueId), "LEAVE", { actor: "user" });
         const freedSlot = transition.from === QueueStatus.SERVING
         //prevents extra db work
+        let promotedIds: number[] = []
         if (freedSlot) {
-            await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
+            promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
         }
-        return transition
+        return { transition, promotedIds }
     })
-
+    emitQueueUpdate(transition, promotedIds)
+    console.log("entered")
     return res.status(200)
         .json(
-            new ApiResponse(200, result, "Status updated")
+            new ApiResponse(200, transition, "Status updated")
         )
 });
 
 export const lateRejoin = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
-    const rejoinStatus = await withTransaction(async (tx) => {
+    const { transition, promotedIds } = await withTransaction(async (tx) => {
         const queue = await tx.queue.findFirst({
             where: {
                 id: Number(queueId),
@@ -266,13 +307,14 @@ export const lateRejoin = asyncHandler(async (req: Request, res: Response) => {
         })
         if (!queue) throw new ApiError(404, "Queue does not exist")
         const transition = await transitionQueueUser(tx, userId, Number(queueId), "REJOIN", { actor: "user" })
-        await promoteIfAvailableSlot(tx, Number(queueId), queue.serviceSlots)
-        return true
+        const promotedIds = await promoteIfAvailableSlot(tx, Number(queueId), queue.serviceSlots)
+        return { transition, promotedIds }
     });
-    const message = rejoinStatus ? "Successfully rejoined" : "Late please rejoin"
+    emitQueueUpdate(transition, promotedIds)
+    const message = transition.to === QueueStatus.WAITING ? "Successfully rejoined" : "Late please rejoin"
     return res.status(200)
         .json(
-            new ApiResponse(200, {}, message)
+            new ApiResponse(200, transition, message)
         )
 
 });
@@ -308,19 +350,7 @@ export const getQueueStatus = asyncHandler(async (req: Request, res: Response) =
         if (ticket.status !== QueueStatus.WAITING) {
             return { ...ticket, position: null }
         }
-        const position = await tx.queueUser.count({
-            where: {
-                queueId: Number(queueId),
-                status: QueueStatus.WAITING,
-                OR: [
-                    { priorityBoost: { gt: ticket.priorityBoost } },
-                    {
-                        priorityBoost: ticket.priorityBoost,
-                        joinedAt: { lt: ticket.joinedAt }
-                    }
-                ]
-            }
-        }) + 1;
+        const position = await calculatePosition(tx, Number(queueId), ticket.joinedAt, ticket.priorityBoost)
         return { ...ticket, position }
 
     })
@@ -330,13 +360,39 @@ export const getQueueStatus = asyncHandler(async (req: Request, res: Response) =
         )
 });
 
+export const getAllQueueTickets = asyncHandler(async (req: Request, res: Response) => {
+    const { userId } = req.user
+    const result = await prisma.$transaction(async (tx) => {
+        const queues = await tx.queueUser.findMany({
+            where: {
+                userId: userId,
+            },
+            include: {
+                queue: {
+                    select: {
+                        name: true
+                    }
+                }
+            },
+            orderBy: {
+                updatedAt: "desc"
+            }
+        })
+        return queues
+    })
+    return res.status(200)
+        .json(
+            new ApiResponse(200, result, "All tickets returned")
+        )
+});
+
 //Admin endpoints
 
 export const markComplete = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId, targetUserId } = req.params
 
-    const result = await withTransaction(async (tx) => {
+    const { transition, promotedIds } = await withTransaction(async (tx) => {
 
         const queue = await tx.queue.findFirst({
             where: {
@@ -346,13 +402,13 @@ export const markComplete = asyncHandler(async (req: Request, res: Response) => 
         })
         if (!queue) throw new ApiError(404, "Queue does not exist");
         const transition = await transitionQueueUser(tx, Number(targetUserId), Number(queueId), "COMPLETE", { actor: "admin" });
-        await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
-        return transition;
+        const promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
+        return { transition, promotedIds };
     })
-
+    emitQueueUpdate(transition, promotedIds)
     return res.status(200)
         .json(
-            new ApiResponse(200, result, "Status updated.")
+            new ApiResponse(200, transition, "Status updated.")
         )
 
 });
@@ -362,7 +418,7 @@ export const markLate = asyncHandler(async (req: Request, res: Response) => {
     const { queueId, targetUserId } = req.params
 
 
-    const result = await withTransaction(async (tx) => {
+    const { transition, promotedIds } = await withTransaction(async (tx) => {
 
         const queue = await tx.queue.findFirst({
             where: {
@@ -372,13 +428,15 @@ export const markLate = asyncHandler(async (req: Request, res: Response) => {
         })
         if (!queue) throw new ApiError(404, "Queue does not exist");
         const transition = await transitionQueueUser(tx, Number(targetUserId), Number(queueId), "MARK_LATE", { actor: "admin" });
-        await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
-        return transition
-    })
 
+        const promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
+
+        return { transition, promotedIds }
+    })
+    emitQueueUpdate(transition, promotedIds)
     return res.status(200)
         .json(
-            new ApiResponse(200, result, "Status updated.")
+            new ApiResponse(200, transition, "Status updated.")
         )
 });
 
@@ -386,7 +444,7 @@ export const removeQueueUser = asyncHandler(async (req: Request, res: Response) 
     const { userId } = req.user
     const { queueId, targetUserId } = req.params
 
-    const result = await withTransaction(async (tx) => {
+    const { transition, promotedIds } = await withTransaction(async (tx) => {
 
         const queue = await tx.queue.findFirst({
             where: {
@@ -397,16 +455,16 @@ export const removeQueueUser = asyncHandler(async (req: Request, res: Response) 
         if (!queue) throw new ApiError(404, "Queue does not exist")
         const transition = await transitionQueueUser(tx, Number(targetUserId), Number(queueId), "LEAVE", { actor: "admin" });
         //prevents extra db work
-        const freedSlot = transition.from === QueueStatus.SERVING
-        if (freedSlot) {
-            await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
+        let promotedIds: number[] = [];
+        if (transition.from === QueueStatus.SERVING) {
+            promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
         }
-        return transition
+        return { transition, promotedIds };
     })
-
+    emitQueueUpdate(transition, promotedIds)
     return res.status(200)
         .json(
-            new ApiResponse(200, result, "Status updated")
+            new ApiResponse(200, transition, "Status updated")
         )
 });
 

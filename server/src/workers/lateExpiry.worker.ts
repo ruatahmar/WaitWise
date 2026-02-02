@@ -4,6 +4,7 @@ import { QueueStatus } from "../../generated/prisma/enums.js";
 import { transitionQueueUser } from "../core/queueUserStateMachine.js";
 import { redisConnection } from "../infra/redis.js";
 import { resolve } from "node:dns";
+import { io } from "../index.js";
 
 export const lateExpiryWorker = new Worker(
     "late-expiry",
@@ -25,8 +26,12 @@ export const lateExpiryWorker = new Worker(
             if (!qu.expiresAt || qu.expiresAt > now) return
 
             const res = await transitionQueueUser(tx, userId, queueId, "MISSED", { actor: "system", now })
-            console.log(res)
             if (!res) return
+            io.to(`queueUser:${res.queueUserId}`).emit("queueUpdate", {
+                status: res.to,
+                position: res.position,
+                priorityBoost: res.priorityBoost
+            });
         })
     },
     {

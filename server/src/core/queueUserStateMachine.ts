@@ -4,7 +4,8 @@ import { QueueEventType, QueueStatus } from "../../generated/prisma/enums.js";
 import ApiError from "../utils/apiError.js";
 import { enqueueCheckLateExpiry } from "../jobs/lateExpiry.js";
 import { enqueuePromoteIfFree } from "../jobs/promoteIfFreeSlot.js";
-import { logEvent } from "../utils/eventAudit.js";
+import { logEvent } from "./events.js";
+import { io } from "../index.js";
 
 /**
  * QueueUser state transitions are centralized here to:
@@ -102,6 +103,9 @@ export async function transitionQueueUser(
             updates.priorityBoost = 1
         }
     }
+    if (event !== "REJOIN") {
+        updates.priorityBoost = 0
+    }
     if (event === "SERVE" && ctx.actor !== "system") {
         throw new ApiError(403, "Only system can promote users");
     }
@@ -119,6 +123,21 @@ export async function transitionQueueUser(
     if (updated.count !== 1) {
         throw new ApiError(400, "State changed concurrently");
     }
+    const updatedQu = await tx.queueUser.findUnique({
+        where: {
+            userId_queueId: {
+                userId,
+                queueId,
+            },
+        },
+    });
+
+    if (!updatedQu) {
+        throw new ApiError(500, "Invariant violation: updated QueueUser missing");
+    }
+    //web socket updates
+    const position = await calculatePosition(tx, queueId, updatedQu.joinedAt, updatedQu.priorityBoost)
+    //audit event
     await logEvent(
         tx,
         queueId,
@@ -126,7 +145,7 @@ export async function transitionQueueUser(
         {
             actor: ctx.actor,
             from: qu.status,
-            to: updates.nextStatus
+            to: nextStatus
         },
         qu.id
     )
@@ -146,7 +165,7 @@ export async function transitionQueueUser(
     }
     // await emitEvent(tx, qu.status, nextStatus, event)
 
-    return { from: qu.status, to: nextStatus };
+    return { queueUserId: updatedQu.id, from: qu.status, to: updatedQu.status, position: position, priorityBoost: updatedQu.priorityBoost };
 }
 export function decideQueueUserTransition(
     currentStatus: QueueStatus,
@@ -189,7 +208,24 @@ async function computeExpiry(
         (ctx.now ?? new Date()).getTime() + turnExpiryMinutes * 60_000,
     );
 }
-// function emitEvent(tx, status, nextStatus, event) {
-
-// }
+export async function calculatePosition(
+    tx: Prisma.TransactionClient,
+    queueId: number,
+    joinedAt: Date,
+    priorityBoost: number = 0,
+) {
+    const position = await tx.queueUser.count({
+        where: {
+            queueId: Number(queueId),
+            status: QueueStatus.WAITING,
+            OR: [
+                { priorityBoost: { gt: priorityBoost } },
+                {
+                    priorityBoost: priorityBoost,
+                    joinedAt: { lt: joinedAt }
+                }
+            ]
+        }
+    }) + 1;
+}
 

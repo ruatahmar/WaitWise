@@ -24,6 +24,6 @@ export async function enqueueCheckLateExpiry(
             jobId: `late-expiry-${payload.queueId}-${payload.userId}`
         }
     )
-    console.log("Enqueue checkLateExpiry", payload, 0)
+    console.log("Enqueue checkLateExpiry", payload, delayMs)
 }
 
