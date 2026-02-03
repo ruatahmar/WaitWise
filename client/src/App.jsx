@@ -4,6 +4,7 @@ import MyQueues from "./pages/myQueues"
 import Login from "./pages/login"
 import { QueueStatus } from "./pages/queueStatus"
 import Register from "./pages/register"
+import MyQueuesPage from "./pages/bruh"
 function App() {
 
 
@@ -12,7 +13,7 @@ function App() {
       <BrowserRouter>
         <AuthProvider>
           <Routes>
-            <Route path="/queues" element={<MyQueues />} />
+            <Route path="/queues" element={<MyQueuesPage />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/queues/:queueId/:queueUserId" element={<QueueStatus />} />

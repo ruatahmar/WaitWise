@@ -31,6 +31,7 @@ model RefreshToken {
   id        String   @id @default(cuid())
   user      User     @relation(fields: [userId], references: [id])
   userId    Int
+  deviceId  String         
 
   token     String
   expiresAt DateTime
@@ -38,6 +39,7 @@ model RefreshToken {
   revoked   Boolean  @default(false)
 
   @@index([userId])
+  @@unique([userId, deviceId])
 }
 model Queue {
   id          Int         @id @default(autoincrement())
