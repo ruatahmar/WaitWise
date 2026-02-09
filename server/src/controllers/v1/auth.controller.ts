@@ -4,11 +4,9 @@ import { prisma } from "../../infra/db.js";
 import ApiError from "../../utils/apiError.js";
 import bcrypt from "bcrypt"
 import { v4 as uuidv4 } from 'uuid';
-import ms from "ms"
 import { generateAccessToken, generateRefreshToken, TokenPayload, REFRESH_TOKEN_EXPIRY_MS } from "../../utils/tokens.js";
 import ApiResponse from "../../utils/apiResponse.js";
 import { withTransaction } from "../../utils/transaction.js";
-import { SHARE_ENV } from "node:worker_threads";
 
 const hashPassword = (password: string): Promise<string> => {
     const saltRound = 10
@@ -82,7 +80,6 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
                 }
             })
         }
-
         return { accessToken, refreshToken, deviceId }
     })
     return res.status(200).cookie("refreshToken", refreshToken, options)
@@ -127,7 +124,6 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
         })
         return { accessToken, refreshToken, deviceId }
     })
-
     return res.status(201).cookie("refreshToken", refreshToken, options)
         .cookie("deviceId", deviceId, options)
         .json(

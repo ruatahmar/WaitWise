@@ -8,6 +8,7 @@ const globalErrorHandler = (
     next: NextFunction
 ) => {
     if (err instanceof ApiError) {
+        console.log(err)
         return res.status(err.statusCode).json({
             status: err.statusCode,
             message: err.message

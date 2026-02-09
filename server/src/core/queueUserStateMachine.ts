@@ -49,8 +49,8 @@ const queueEventsMapper = {
     REJOIN: QueueEventType.QUEUEUSER_REJOINED,
     MISSED: QueueEventType.QUEUEUSER_MISSED
 }
-export type QueueUserEvent = keyof typeof queueEventsMapper;
 
+export type QueueUserEvent = keyof typeof queueEventsMapper;
 
 export interface TransitionContext {
     actor: "admin" | "system" | "user";
@@ -58,8 +58,21 @@ export interface TransitionContext {
     now?: Date;
     queue?: {
         id: number;
-        turnExpiryMinutes: number;
+        graceTime: number;
     };
+}
+
+
+export type QueueUserTransitionResult = {
+    queueUserId: number
+    position: number
+    priorityBoost: number
+    from: QueueStatus
+    to: QueueStatus
+
+    // optional
+    expiresAt?: Date
+    servedAt?: Date
 }
 
 export async function transitionQueueUser(
@@ -82,7 +95,7 @@ export async function transitionQueueUser(
     const nextStatus = decideQueueUserTransition(qu.status, event)
 
     //Apply side effects
-    const updates: any = { status: nextStatus };
+    const updates: any = { status: nextStatus, priorityBoost: 0 };
     if (qu.status === QueueStatus.SERVING && nextStatus === QueueStatus.COMPLETED) {
         const now = ctx.now ?? new Date();
         updates.servedAt = now;
@@ -91,7 +104,7 @@ export async function transitionQueueUser(
     if (nextStatus === QueueStatus.LATE) {
         updates.expiresAt = await computeExpiry(qu.queueId, ctx, tx);
     }
-    if (qu.status === QueueStatus.LATE && nextStatus !== QueueStatus.LATE) {
+    if (qu.status === QueueStatus.LATE && nextStatus !== QueueStatus.LATE && nextStatus !== QueueStatus.MISSED) {
         updates.expiresAt = null
     }
     if (qu.status === QueueStatus.LATE && event === "REJOIN") {
@@ -102,9 +115,6 @@ export async function transitionQueueUser(
         else {
             updates.priorityBoost = 1
         }
-    }
-    if (event !== "REJOIN") {
-        updates.priorityBoost = 0
     }
     if (event === "SERVE" && ctx.actor !== "system") {
         throw new ApiError(403, "Only system can promote users");
@@ -135,6 +145,7 @@ export async function transitionQueueUser(
     if (!updatedQu) {
         throw new ApiError(500, "Invariant violation: updated QueueUser missing");
     }
+
     //web socket updates
     const position = await calculatePosition(tx, queueId, updatedQu.joinedAt, updatedQu.priorityBoost)
     //audit event
@@ -164,9 +175,20 @@ export async function transitionQueueUser(
         await enqueuePromoteIfFree({ queueId: qu.queueId })
     }
     // await emitEvent(tx, qu.status, nextStatus, event)
-
-    return { queueUserId: updatedQu.id, from: qu.status, to: updatedQu.status, position: position, priorityBoost: updatedQu.priorityBoost };
+    const result: QueueUserTransitionResult = {
+        queueUserId: updatedQu.id,
+        from: qu.status,
+        to: updatedQu.status,
+        position: Number(position),
+        priorityBoost: updatedQu.priorityBoost,
+    };
+    if (updatedQu.expiresAt) {
+        result.expiresAt = updatedQu.expiresAt;
+    }
+    console.log(result)
+    return result
 }
+
 export function decideQueueUserTransition(
     currentStatus: QueueStatus,
     event: QueueUserEvent
@@ -191,23 +213,24 @@ async function computeExpiry(
     ctx: TransitionContext,
     tx: Prisma.TransactionClient,
 ) {
-    let turnExpiryMinutes: number;
+    let graceTime: number;
 
     if (ctx.queue && ctx.queue.id === queueId) {
-        turnExpiryMinutes = ctx.queue.turnExpiryMinutes;
+        graceTime = ctx.queue.graceTime;
     } else {
         const queue = await tx.queue.findUnique({
             where: { id: queueId },
-            select: { turnExpiryMinutes: true },
+            select: { graceTime: true },
         });
         if (!queue) throw new Error("Queue not found");
-        turnExpiryMinutes = queue.turnExpiryMinutes;
+        graceTime = queue.graceTime;
     }
 
     return new Date(
-        (ctx.now ?? new Date()).getTime() + turnExpiryMinutes * 60_000,
+        (ctx.now ?? new Date()).getTime() + graceTime * 60_000,
     );
 }
+
 export async function calculatePosition(
     tx: Prisma.TransactionClient,
     queueId: number,
@@ -217,7 +240,12 @@ export async function calculatePosition(
     const position = await tx.queueUser.count({
         where: {
             queueId: Number(queueId),
-            status: QueueStatus.WAITING,
+            status: {
+                in: [
+                    QueueStatus.WAITING,
+                    QueueStatus.LATE
+                ]
+            },
             OR: [
                 { priorityBoost: { gt: priorityBoost } },
                 {
@@ -227,5 +255,6 @@ export async function calculatePosition(
             ]
         }
     }) + 1;
+    return position
 }
 

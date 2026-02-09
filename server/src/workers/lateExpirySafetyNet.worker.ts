@@ -11,7 +11,7 @@ export function startLateExpirySafetyNet() {
                 where: {
                     status: QueueStatus.LATE,
                     expiresAt: {
-                        lte: now, //less than or equal 
+                        lte: now, //less than or equal
                     },
 
                 }

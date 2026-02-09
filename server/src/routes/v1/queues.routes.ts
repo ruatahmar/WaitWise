@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createQueue, deleteQueue, getAllQueueTickets, getQueues, getQueueStatus, getSpecificQueue, joinQueue, lateRejoin, leaveQueue, markComplete, markLate, removeQueueUser, updateQueue } from "../../controllers/v1/queues.controller.js";
+import { createQueue, deleteQueue, getAllQueueTickets, getQueues, getQueueStatus, getQueueUsersPaginated, getSpecificQueue, joinQueue, lateArrived, lateRejoin, leaveQueue, markComplete, markLate, removeQueueUser, updateQueue } from "../../controllers/v1/queues.controller.js";
 import { jwtAuth } from "../../middleware/jwtAuth.js";
 
 const app = Router()
@@ -22,5 +22,7 @@ app.post("/:queueId/rejoin", jwtAuth, lateRejoin)
 app.post("/:queueId/users/:targetUserId/complete", jwtAuth, markComplete)
 app.post("/:queueId/users/:targetUserId/late", jwtAuth, markLate)
 app.post("/:queueId/users/:targetUserId/remove", jwtAuth, removeQueueUser)
+app.post("/:queueId/users/:targetUserId/arrived", jwtAuth, lateArrived)
+app.get("/:queueId/users", jwtAuth, getQueueUsersPaginated); //?page=
 
 export default app;

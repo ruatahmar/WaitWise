@@ -1,6 +1,7 @@
 # QueueUser State Transition Table (V1)
 
 QueueUser uses state transitions to ensure only valid status changes occur, keeping queue integrity consistent and making it easier to enforce invariants (like service slot limits) within transactions.
+
 This document defines **allowed state transitions**, **who can trigger them**, and **required invariants** for `QueueUser` in WaitWise.
 
 This table is the **source of truth**. Any transition not listed here is **invalid** and must be rejected at the controller or transaction layer.
@@ -13,10 +14,12 @@ This table is the **source of truth**. Any transition not listed here is **inval
 - `SERVING` – User is actively being served (occupies a service slot)
 - `LATE` – User was called but did not respond within allowed time
 - `MISSED` – User failed to rejoin before `expiresAt`
+- `CANCELLED` – User/admin removed the user
 - `COMPLETED` – Service finished successfully (terminal)
-- `CANCELLED` – User/admin removed the user (terminal)
 
 Terminal states: **COMPLETED**
+
+Exit states: **MISSED**, **CANCELLED**
 
 ---
 
@@ -29,7 +32,7 @@ Terminal states: **COMPLETED**
 | SERVING    | COMPLETED | Complete          | Admin  | —                        | Free service slot      |
 | SERVING    | LATE      | Mark late         | Admin  | —                        | Set `expiresAt`        |
 | LATE       | WAITING   | Rejoin            | User   | `now <= expiresAt`       | Set `priorityBoost`    |
-| LATE       | MISSED    | Auto / Lazy check | System | `now > expiresAt`        | Terminal               |
+| LATE       | MISSED    | Auto / Lazy check | System | `now > expiresAt`        | Rejoinable             |
 | WAITING    | CANCELLED | Leave             | User   | —                        | —                      |
 | SERVING    | CANCELLED | Leave             | User   | —                        | Free service slot      |
 | WAITING    | CANCELLED | Remove            | Admin  | —                        | —                      |
@@ -60,14 +63,15 @@ Terminal states: **COMPLETED**
 ## Global Invariants
 
 1. At any time:
-   - `COUNT(queueUser WHERE status = SERVING) <= queue.serviceSlots`
+   - The number of `SERVING` users **must never exceed** `queue.serviceSlots`, enforced transactionally.
 
 2. A QueueUser has **exactly one** state
 
-3. Terminal states are **immutable**
+3. `COMPLETED` is **immutable** and cannot transition to any other state.
 
 4. `expiresAt`:
-   - MUST be non-null **only** when `status = LATE`
+   - `expiresAt` is assigned when `SERVING → LATE` transition occurs.
+   - MUST be non-null **only** when `status = LATE` or `status = MISSED`
    - MUST be null otherwise
 
 5. Promotion MUST happen inside a transaction
@@ -75,15 +79,6 @@ Terminal states: **COMPLETED**
 ---
 
 ## Design Notes
-
-<!-- ### MISSED State
-
-- `MISSED` is treated as **terminal**
-- It may be:
-  - eagerly written (cron / background job)
-  - lazily derived at read-time using `expiresAt`
-
-- Even if lazily derived, the **logical state** is still MISSED -->
 
 ### Priority Boost
 
@@ -96,11 +91,19 @@ Terminal states: **COMPLETED**
 
 ### State Transition Machine
 
-- All state transitions happen through the State Transition Machine
-- It becomes the one source of truth
-- It validates **allowed transition**
-- All state Transitions happen in a transaction to enforce **slot invariants**
-- Background workers may reconcile stale states
-- No user-facing request may rely on background repair
+#### State Machine Authority
+
+- All state transitions must pass through the QueueUser state machine.
+- Direct status mutation is forbidden.
+
+#### Transactional Guarantees
+
+- Every transition executes inside a DB transaction.
+- Slot availability and state validity are checked atomically.
+
+#### Background Reconciliation
+
+- Background workers may correct time-derived inconsistencies.
+- User requests must not rely on reconciliation for correctness.
 
 ---

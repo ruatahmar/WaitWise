@@ -1,5 +1,4 @@
 import { v4 as uuidv4 } from "uuid";
-import ms from "ms";
 import { prisma } from "../../infra/db.js";
 import ApiError from "../../utils/apiError.js";
 import asyncHandler from "../../utils/asyncHandler.js";
@@ -8,71 +7,86 @@ import ApiResponse from "../../utils/apiResponse.js";
 import { QueueEventType, QueueStatus } from "../../../generated/prisma/enums.js";
 import { Prisma } from "../../../generated/prisma/client.js";
 import { withTransaction } from "../../utils/transaction.js";
-import { calculatePosition, transitionQueueUser } from "../../core/queueUserStateMachine.js";
+import { calculatePosition, QueueUserTransitionResult, transitionQueueUser } from "../../core/queueUserStateMachine.js";
 import { logEvent } from "../../core/events.js";
-import { io } from "../../index.js";
+import { emitPromotion, emitQueueUpdate, emitUserStatusUpdate } from "../../utils/socketEmitters.js";
 
-export async function promoteIfAvailableSlot(tx: Prisma.TransactionClient, queueId: number, serviceSlots: number): Promise<number[]> {
-    const servingCount = await tx.queueUser.count({
-        where: { queueId, status: QueueStatus.SERVING }
-    });
-    const openSlots = serviceSlots - servingCount;
-    if (openSlots <= 0) return [];
+export async function triggerPromotion(queueId: number): Promise<number[]> {
+    const result = await withTransaction(async (tx) => {
+        await tx.$queryRaw`
+            SELECT id FROM "Queue"
+            WHERE id = ${queueId}
+            FOR UPDATE
+        `;
+        const promotedIds: number[] = [];
+        const queue = await tx.queue.findUnique({
+            where: { id: queueId }
+        })
+        if (!queue) return []
+        while (true) {
 
-    const candidates = await tx.queueUser.findMany({
+            const servingCount = await tx.queueUser.count({
+                where: { queueId, status: QueueStatus.SERVING }
+            });
+            const openSlots = queue.serviceSlots - servingCount;
+            if (openSlots <= 0) break;
+            const candidate = await tx.queueUser.findFirst({
+                where: {
+                    queueId,
+                    status: QueueStatus.WAITING
+                },
+                orderBy: [
+                    { priorityBoost: "desc" },
+                    { joinedAt: "asc" }
+                ],
+            });
+            if (!candidate) break;
+            const res = await transitionQueueUser(tx, candidate.userId, queueId, "SERVE", { actor: "system" })
+            if (!res) break;
+            promotedIds.push(res.queueUserId);
+        }
+        return promotedIds;
+    })
+    for (const id of result) {
+        emitPromotion(id)
+        await emitQueueUpdate(queueId)
+    }
+    return result;
+}
+
+async function countActiveQueueUsers(tx: Prisma.TransactionClient, queueId: number) {
+    const count = await tx.queueUser.count({
         where: {
             queueId,
-            status: QueueStatus.WAITING
-        },
-        orderBy: [
-            { priorityBoost: "desc" },
-            { joinedAt: "asc" }
-        ],
-        take: openSlots
-    });
-    if (candidates.length === 0) return [];
-    const promotedIds: number[] = [];
-    for (const candidate of candidates) {
-        const res = await transitionQueueUser(tx, candidate.userId, queueId, "SERVE", { actor: "system" })
-        if (res) promotedIds.push(res.queueUserId);
-    }
-    return promotedIds;
-}
-
-function emitPromotion(queueUserId: number) {
-    io.to(`queueUser:${queueUserId}`).emit("queueUpdate", {
-        status: QueueStatus.SERVING,
-        position: 0,
-        priorityBoost: 0,
-    });
-}
-
-type TransitionResult = Awaited<ReturnType<typeof transitionQueueUser>>;
-
-function emitQueueUpdate(transition: TransitionResult, promotedIds: number[]) {
-    for (const id of promotedIds) emitPromotion(id);
-    if (!promotedIds.includes(transition.queueUserId)) {
-        io.to(`queueUser:${transition.queueUserId}`).emit("queueUpdate", {
-            status: transition.to,
-            position: transition.position,
-            priorityBoost: transition.priorityBoost,
-        });
-    }
+            status: {
+                in: [
+                    QueueStatus.WAITING,
+                    QueueStatus.LATE,
+                ]
+            }
+        }
+    })
+    return count;
 }
 
 //CRUD
 export const createQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user;
-    const { name, maxSize, servingSlots, tokenTTL } = req.body;
-
+    const { name, maxSize = null, serviceSlots = null, graceTime } = req.body;
+    console.log(req.body)
     //invariant check
-    if (maxSize != null && maxSize <= 0) {
-        throw new ApiError(400, "maxSize must be > 0");
-    }
-    if (tokenTTL != null && tokenTTL < 0) {
+    // let maxSizeCheck: number | null = maxSize
+    // if (maxSize <= 0) {
+    //     maxSizeCheck = null
+    // }
+    // let maxSizeCheck: number | null = maxSize
+    // if (maxSize <= 0) {
+    //     maxSizeCheck = null
+    // }
+    if (graceTime != null && graceTime < 0) {
         throw new ApiError(400, "turnExpiryMinutes must be > 0");
     }
-    if (servingSlots != null && servingSlots < 0) {
+    if (serviceSlots != null && serviceSlots < 0) {
         throw new ApiError(400, "servingSlots must be > 0");
     }
     const exist = await prisma.queue.findFirst({
@@ -85,12 +99,16 @@ export const createQueue = asyncHandler(async (req: Request, res: Response) => {
     const newQueue = await prisma.queue.create({
         data: {
             name,
-            adminId: userId,
-            maxSize,
-            serviceSlots: servingSlots,
-            turnExpiryMinutes: tokenTTL
+            // adminId: userId,
+            maxSize: Number(maxSize),
+            serviceSlots: Number(serviceSlots),
+            graceTime: Number(graceTime),
+            admin: {
+                connect: { id: userId }
+            }
         }
     })
+
 
     return res.status(201).json(
         new ApiResponse(201, newQueue, "Queue created")
@@ -99,65 +117,71 @@ export const createQueue = asyncHandler(async (req: Request, res: Response) => {
 
 export const getQueues = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
-    const queues = await prisma.queue.findMany({
-        where: {
-            adminId: userId
-        },
-        orderBy: {
-            createdAt: 'desc'
-        }
+    const result = await withTransaction(async (tx) => {
+        const queues = await tx.queue.findMany({
+            where: {
+                adminId: userId
+            },
+            orderBy: {
+                updatedAt: 'desc'
+            }
+        })
+        const queuesWithCount = await Promise.all(
+            queues.map(async (queue) => {
+                const count = await countActiveQueueUsers(tx, queue.id)
+                return { ...queue, count }
+            })
+        )
+        return queuesWithCount
     })
+
     return res.status(200)
         .json(
-            new ApiResponse(200, queues, "Queues returned")
+            new ApiResponse(200, result, "Queues returned")
         )
-
 });
 
 export const getSpecificQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
-    const queue = await prisma.queue.findFirst({
-        where: {
-            id: Number(queueId),
-            adminId: userId
-        }
+    const result = await withTransaction(async (tx) => {
+        const queue = await tx.queue.findFirst({
+            where: {
+                id: Number(queueId),
+                adminId: userId
+            }
+        })
+        if (!queue) throw new ApiError(404, "Queue not found or you don't have permission");
+        const count = await countActiveQueueUsers(tx, queue.id)
+        return { ...queue, count }
     })
-    if (!queue) throw new ApiError(404, "Queue not found or you don't have permission");
 
     return res.status(200)
         .json(
-            new ApiResponse(200, queue, "Queue retrieved")
+            new ApiResponse(200, result, "Queue retrieved")
         )
 });
 
 export const updateQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
-    const { name, maxSize, serviceSlots, tokenTTL } = req.body;
-
+    const { name, maxSize, serviceSlots, graceTime } = req.body;
+    console.log(req.body)
+    const maxSizeCheck = maxSize <= 0 ? null : Number(maxSize)
     const result = await withTransaction(async (tx) => {
         const updated = await tx.queue.updateMany({
             where: { id: Number(queueId), adminId: userId },
             data: {
                 name,
-                maxSize,
-                serviceSlots,
-                turnExpiryMinutes: tokenTTL
+                maxSize: maxSizeCheck,
+                serviceSlots: Number(serviceSlots),
+                graceTime: Number(graceTime)
             }
         });
-
-        if (updated.count === 0) throw new ApiError(404, "Queue does not exist");
-        if (serviceSlots !== undefined && serviceSlots !== null) {
-            const promoted = await promoteIfAvailableSlot(tx, Number(queueId), serviceSlots)
-            return { updated, promoted }
-        }
-
-        return { updated, promoted: false }
+        return updated
     });
-
+    await triggerPromotion(Number(queueId))
     return res.status(200).json(new ApiResponse(200, result, "Queue updated"));
-
 });
 
 export const deleteQueue = asyncHandler(async (req: Request, res: Response) => {
@@ -183,7 +207,7 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
 
 
 
-    const { transition, promotedIds } = await withTransaction(async (tx): Promise<{ transition: TransitionResult, promotedIds: number[] }> => {
+    const transition = await withTransaction(async (tx): Promise<QueueUserTransitionResult> => {
         //queue existance check
         const queue = await tx.queue.findUnique({
             where: { id: Number(queueId) }
@@ -210,7 +234,7 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
                 }
             }
         });
-        let transition: TransitionResult;
+        let transition: QueueUserTransitionResult;
         if (existing) {
             if (
                 existing.status === QueueStatus.CANCELLED ||
@@ -255,15 +279,15 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
                 queueUserId: created.id,
                 from: QueueStatus.WAITING,
                 to: QueueStatus.WAITING,
-                position,
+                position: Number(position),
                 priorityBoost: 0,
-            } as TransitionResult;
+            } as QueueUserTransitionResult;
         }
-        const promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
-
-        return { transition, promotedIds };
+        return transition;
     });
-    emitQueueUpdate(transition, promotedIds)
+    triggerPromotion(Number(queueId))
+    emitUserStatusUpdate(transition)
+    await emitQueueUpdate(Number(queueId))
     return res.status(201).json(new ApiResponse(201, transition, "Joined queue"));
 });
 
@@ -271,7 +295,7 @@ export const leaveQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
 
-    const { transition, promotedIds } = await withTransaction(async (tx) => {
+    const transition = await withTransaction(async (tx) => {
         const queue = await tx.queue.findFirst({
             where: {
                 id: Number(queueId),
@@ -280,43 +304,22 @@ export const leaveQueue = asyncHandler(async (req: Request, res: Response) => {
         if (!queue) throw new ApiError(404, "Queue does not exist")
 
         const transition = await transitionQueueUser(tx, Number(userId), Number(queueId), "LEAVE", { actor: "user" });
-        const freedSlot = transition.from === QueueStatus.SERVING
-        //prevents extra db work
-        let promotedIds: number[] = []
-        if (freedSlot) {
-            promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
-        }
-        return { transition, promotedIds }
+        // const freedSlot = transition.from === QueueStatus.SERVING
+        // //prevents extra db work
+        // let promotedIds: number[] = []
+        // if (freedSlot) {
+        //     promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
+        // }
+        return transition
     })
-    emitQueueUpdate(transition, promotedIds)
+    triggerPromotion(Number(queueId))
+    emitUserStatusUpdate(transition)
+    await emitQueueUpdate(Number(queueId))
     console.log("entered")
     return res.status(200)
         .json(
             new ApiResponse(200, transition, "Status updated")
         )
-});
-
-export const lateRejoin = asyncHandler(async (req: Request, res: Response) => {
-    const { userId } = req.user
-    const { queueId } = req.params
-    const { transition, promotedIds } = await withTransaction(async (tx) => {
-        const queue = await tx.queue.findFirst({
-            where: {
-                id: Number(queueId),
-            }
-        })
-        if (!queue) throw new ApiError(404, "Queue does not exist")
-        const transition = await transitionQueueUser(tx, userId, Number(queueId), "REJOIN", { actor: "user" })
-        const promotedIds = await promoteIfAvailableSlot(tx, Number(queueId), queue.serviceSlots)
-        return { transition, promotedIds }
-    });
-    emitQueueUpdate(transition, promotedIds)
-    const message = transition.to === QueueStatus.WAITING ? "Successfully rejoined" : "Late please rejoin"
-    return res.status(200)
-        .json(
-            new ApiResponse(200, transition, message)
-        )
-
 });
 
 export const getQueueStatus = asyncHandler(async (req: Request, res: Response) => {
@@ -341,7 +344,8 @@ export const getQueueStatus = asyncHandler(async (req: Request, res: Response) =
                     select: {
                         name: true,
                         serviceSlots: true,
-                        turnExpiryMinutes: true
+                        graceTime: true,
+                        maxSize: true
                     }
                 },
             },
@@ -351,7 +355,9 @@ export const getQueueStatus = asyncHandler(async (req: Request, res: Response) =
             return { ...ticket, position: null }
         }
         const position = await calculatePosition(tx, Number(queueId), ticket.joinedAt, ticket.priorityBoost)
-        return { ...ticket, position }
+        console.log(position)
+        const count = await countActiveQueueUsers(tx, Number(queueId))
+        return { ...ticket, position, count }
 
     })
     return res.status(200)
@@ -386,13 +392,37 @@ export const getAllQueueTickets = asyncHandler(async (req: Request, res: Respons
         )
 });
 
+export const lateRejoin = asyncHandler(async (req: Request, res: Response) => {
+    const { userId } = req.user
+    const { queueId } = req.params
+    const transition = await withTransaction(async (tx) => {
+        const queue = await tx.queue.findFirst({
+            where: {
+                id: Number(queueId),
+            }
+        })
+        if (!queue) throw new ApiError(404, "Queue does not exist")
+        const transition = await transitionQueueUser(tx, userId, Number(queueId), "REJOIN", { actor: "user" })
+
+        return transition
+    });
+    triggerPromotion(Number(queueId))
+    emitUserStatusUpdate(transition)
+    await emitQueueUpdate(Number(queueId))
+    const message = transition.to === QueueStatus.WAITING ? "Successfully rejoined" : "Late please rejoin"
+    return res.status(200)
+        .json(
+            new ApiResponse(200, transition, message)
+        )
+
+});
 //Admin endpoints
 
 export const markComplete = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId, targetUserId } = req.params
 
-    const { transition, promotedIds } = await withTransaction(async (tx) => {
+    const transition = await withTransaction(async (tx) => {
 
         const queue = await tx.queue.findFirst({
             where: {
@@ -402,10 +432,12 @@ export const markComplete = asyncHandler(async (req: Request, res: Response) => 
         })
         if (!queue) throw new ApiError(404, "Queue does not exist");
         const transition = await transitionQueueUser(tx, Number(targetUserId), Number(queueId), "COMPLETE", { actor: "admin" });
-        const promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
-        return { transition, promotedIds };
+        // const promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
+        return transition//{ , promotedIds };
     })
-    emitQueueUpdate(transition, promotedIds)
+    triggerPromotion(Number(queueId))
+    emitUserStatusUpdate(transition)
+    await emitQueueUpdate(Number(queueId))
     return res.status(200)
         .json(
             new ApiResponse(200, transition, "Status updated.")
@@ -418,7 +450,7 @@ export const markLate = asyncHandler(async (req: Request, res: Response) => {
     const { queueId, targetUserId } = req.params
 
 
-    const { transition, promotedIds } = await withTransaction(async (tx) => {
+    const transition = await withTransaction(async (tx) => {
 
         const queue = await tx.queue.findFirst({
             where: {
@@ -429,11 +461,13 @@ export const markLate = asyncHandler(async (req: Request, res: Response) => {
         if (!queue) throw new ApiError(404, "Queue does not exist");
         const transition = await transitionQueueUser(tx, Number(targetUserId), Number(queueId), "MARK_LATE", { actor: "admin" });
 
-        const promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
+        // const promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
 
-        return { transition, promotedIds }
+        return transition//{ , promotedIds }
     })
-    emitQueueUpdate(transition, promotedIds)
+    triggerPromotion(Number(queueId))
+    emitUserStatusUpdate(transition)
+    await emitQueueUpdate(Number(queueId))
     return res.status(200)
         .json(
             new ApiResponse(200, transition, "Status updated.")
@@ -444,7 +478,7 @@ export const removeQueueUser = asyncHandler(async (req: Request, res: Response) 
     const { userId } = req.user
     const { queueId, targetUserId } = req.params
 
-    const { transition, promotedIds } = await withTransaction(async (tx) => {
+    const transition = await withTransaction(async (tx) => {
 
         const queue = await tx.queue.findFirst({
             where: {
@@ -455,18 +489,108 @@ export const removeQueueUser = asyncHandler(async (req: Request, res: Response) 
         if (!queue) throw new ApiError(404, "Queue does not exist")
         const transition = await transitionQueueUser(tx, Number(targetUserId), Number(queueId), "LEAVE", { actor: "admin" });
         //prevents extra db work
-        let promotedIds: number[] = [];
-        if (transition.from === QueueStatus.SERVING) {
-            promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
-        }
-        return { transition, promotedIds };
+        return transition
     })
-    emitQueueUpdate(transition, promotedIds)
+
+    triggerPromotion(Number(queueId))
+
+    emitUserStatusUpdate(transition)
+    await emitQueueUpdate(Number(queueId))
     return res.status(200)
         .json(
             new ApiResponse(200, transition, "Status updated")
         )
 });
 
+export const getQueueUsersPaginated = asyncHandler(async (req: Request, res: Response) => {
+    const { userId } = req.user
+    const { queueId } = req.params
+    const { page = "0" } = req.query
 
+    const pageNum = Math.max(0, Number(page) || 0);
+    const limit = 10;
 
+    const { users, total } = await withTransaction(async (tx) => {
+        const queue = await tx.queue.findFirst({
+            where: {
+                id: Number(queueId),
+                adminId: userId
+            }
+        });
+
+        if (!queue) throw new ApiError(403, "Not authorized");
+        const users = await tx.queueUser.findMany({
+            where: {
+                queueId: Number(queueId),
+                // status: {
+                //     in: [
+                //         QueueStatus.SERVING,
+                //         QueueStatus.WAITING,
+                //         QueueStatus.LATE
+                //     ]
+                // }
+            },
+            include: {
+                user: {
+                    select: {
+                        name: true
+                    }
+                }
+            },
+            orderBy: [
+                { priorityBoost: "desc" },
+                { joinedAt: "asc" }
+            ],
+            skip: pageNum * limit,
+            take: limit
+
+        })
+        const total = await tx.queueUser.count({
+            where: {
+                queueId: Number(queueId),
+            }
+        })
+        return { users, total }
+    })
+    const result = {
+        users,
+        paginated: {
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit)
+
+        }
+    }
+    return res.status(200).json(
+        new ApiResponse(200, result, "Data fetched")
+    )
+
+});
+
+export const lateArrived = asyncHandler(async (req: Request, res: Response) => {
+    const { userId } = req.user
+    const { queueId, targetUserId } = req.params
+    const transition = await withTransaction(async (tx) => {
+        const queue = await tx.queue.findFirst({
+            where: {
+                id: Number(queueId),
+                adminId: userId
+            }
+        })
+        if (!queue) throw new ApiError(404, "Queue does not exist")
+        const transition = await transitionQueueUser(tx, Number(targetUserId), Number(queueId), "REJOIN", { actor: "user" })
+        // const promotedIds = await promoteIfAvailableSlot(tx, Number(queueId), queue.serviceSlots)
+        return transition
+    });
+    triggerPromotion(Number(queueId))
+    emitUserStatusUpdate(transition)
+    await emitQueueUpdate(Number(queueId))
+    const message = transition.to === QueueStatus.WAITING ? "Successfully rejoined" : "Late please rejoin"
+
+    return res.status(200)
+        .json(
+            new ApiResponse(200, transition, message)
+        )
+
+});

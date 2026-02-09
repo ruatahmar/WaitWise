@@ -1,5 +1,4 @@
 import http from "http";
-import { Server } from "socket.io";
 import express from "express";
 import cors from "cors"
 import "dotenv/config";
@@ -32,21 +31,6 @@ app.get("/jwtTest", jwtAuth, () => {
     return
 })
 
-// const httpServer = http.createServer(app);
-
-// export const io = new Server(httpServer, {
-//     cors: {
-//         origin: "*", // lock this down later
-//     },
-// });
-// io.on("connection", (socket) => {
-//     console.log("Socket connected:", socket.id);
-// });
-
-// httpServer.listen(3000, () => {
-//     console.log("Server running");
-// });
-
 
 import { initSocket } from "./socket.js";
 
@@ -54,6 +38,12 @@ const server = http.createServer(app);
 
 export const io = initSocket(server);
 
-server.listen(8080, () => {
-    console.log("server running on 8080");
-});
+function startHttpServer() {
+    server.listen(8080, () => {
+        console.log("server running on 8080");
+    });
+}
+
+if (process.env.RUN_MODE !== "worker") { // this is because booting up the workers run the main server 
+    startHttpServer();
+}

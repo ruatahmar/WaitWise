@@ -15,7 +15,7 @@ export function AuthProvider({ children }) {
             try {
                 const res = await refreshToken()
                 tokenStore.set(res.data.data.accessToken);
-                setUser(res.data.data.user)
+                setUser(res.data.data)
             } catch {
                 tokenStore.clear()
                 setUser(null)

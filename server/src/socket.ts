@@ -21,6 +21,17 @@ export function initSocket(httpServer: HttpServer) {
             socket.leave(`queueUser:${queueUserId}`);
             console.log(`left queueUser:${queueUserId}`);
         });
+
+        socket.on("joinQueue", ({ queueId }) => {
+            socket.join(`queue:${queueId}`);
+            console.log(`joined queue:${queueId}`)
+        });
+
+        socket.on("leaveQueue", ({ queueId }) => {
+            socket.join(`queue:${queueId}`);
+            console.log(`joined queue:${queueId}`)
+        });
+
         socket.on("disconnect", () => {
             console.log("socket disconnected:", socket.id);
         });

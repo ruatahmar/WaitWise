@@ -7,7 +7,7 @@
     "build": "tsc && node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "test": "vitest",
-    "workers": "tsx src/workers/start.ts"
+    "workers": "cross-env RUN_MODE=worker tsx src/workers/start.ts"
   },
   "repository": {
     "type": "git",

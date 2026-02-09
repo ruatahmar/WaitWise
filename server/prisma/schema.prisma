@@ -49,7 +49,7 @@ model Queue {
 
   serviceSlots   Int       @default(1)
   maxSize      Int?
-  turnExpiryMinutes    Int @default(5)  
+  graceTime    Int          @default(5)  
   
   queueUsers  QueueUser[] 
   queueEvents QueueEvents[]

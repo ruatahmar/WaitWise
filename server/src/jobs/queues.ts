@@ -1,15 +1,41 @@
-
+import type { Redis } from "ioredis";
 import { Queue } from "bullmq";
-import { redisConnection } from "../infra/redis.js";
+import { getRedis } from "../infra/redis.js";
+
+let redis: Redis | null = null
+let lateExpiryQueue: Queue | null = null
+let promoteIfFreeQueue: Queue | null = null
+
+function getConnection(): Redis {
+    if (!redis) {
+        redis = getRedis();
+    }
+    return redis;
+}
+export function getLateExpiryQueue() {
+    if (!lateExpiryQueue) {
+        lateExpiryQueue = new Queue("late-expiry",
+            {
+                connection: getConnection(),
+            }
+        );
+    }
+    return lateExpiryQueue;
+
+}
 
 
-export const lateExpiryQueue = new Queue("late-expiry", {
-    connection: redisConnection,
-});
+export function getPromoteIfFreeQueue() {
+    if (!promoteIfFreeQueue) {
+        promoteIfFreeQueue = new Queue("promote-if-free-slot",
+            {
+                connection: getConnection(),
+            }
+        )
+    }
+    return promoteIfFreeQueue
+}
 
-export const promoteIfFreeQueue = new Queue("promote-if-free-slot", {
-    connection: redisConnection,
-})
 
 
 

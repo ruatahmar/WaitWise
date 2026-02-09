@@ -29,8 +29,8 @@ Invariants are rules that **must always hold true** in the system, regardless of
 - Each Queue is owned by **exactly one admin User**
 - Queue names must be **unique per admin**
 - A Queue must have:
-  - `maxActiveUsers > 0`
-  - `turnExpiryMinutes > 0`
+  - `maxSize > 0`
+  - `graceTime > 0`
   <!-- this is implemented at database level -->
 
 ---
@@ -57,8 +57,14 @@ The status must never be `NULL` and must never represent multiple states.
 - A User may own multiple refresh tokens
 - A User may own at most one refresh token per device
 - Each refresh token belongs to exactly one User
-- Each refresh token is associated with exactly one device identifier
-- At no point may two active refresh tokens exist with the same (userId, deviceId) pair.\*
+- Each refresh token is associated with exactly one device identifier, `deviceId`
+- At no point may two active refresh tokens exist with the same (`userId, deviceId`) pair.\*
+
+### 2.5 Queue Integrity
+
+- A Queue must not exist without an owner.
+- A QueueUser must not exist without a Queue.
+- Orphaned relational states are invalid.
 
 ---
 
@@ -74,20 +80,24 @@ The status must never be `NULL` and must never represent multiple states.
 
 ### 4.1 servedAt
 
-- `servedAt` **must be NULL** unless `status === SERVING`
-- If `status === SERVING`, `servedAt` \*\*must NOT be NULL`
+- `servedAt` **must be NULL** unless `status === SERVING` or `status === COMPLETED`
 
 ### 4.2 expiresAt
 
-- `expiresAt` **must be NULL** unless `status === LATE`
-- If `status === SERVING`, `servedAt` \*\*must NOT be NULL`
+- `expiresAt` **must be NULL** unless `status === LATE` or `status === MISSED`
 - If the current time exceeds `expiresAt`:
-- Status must eventually transition to `MISSED`
+  - Status must eventually transition to `MISSED`
 
 ### 4.3 priorityBoost
 
 - `priorityBoost` **must be 0** for normal users in the queue
 - `priorityBoost === 1` for late users who rejoin under grace time
+
+### 4.4 Temporal Monotonicity
+
+- `servedAt` must be ≥ join time
+- `expiresAt` must be ≥ `servedAt`
+- System time regressions must not produce invalid transitions
 
 ---
 
@@ -97,9 +107,7 @@ The status must never be `NULL` and must never represent multiple states.
 
 At any point in time:
 
-```
-COUNT(QueueUsers WHERE status = 'SERVING') <= Queue.servingSlots
-```
+- The number of `SERVING` users **must never exceed** `queue.serviceSlots`, enforced transactionally.
 
 This invariant must hold even under:
 
@@ -113,9 +121,29 @@ Violations must be prevented using **transactions and locking**.
 
 ### 5.2 FIFO Ordering
 
-- QueueUsers must be served in **join order**
-- No user may be served before all earlier WAITING users
+- QueueUsers must be served in deterministic queue order derived from:
+  1. priorityBoost
+  2. join timestamp
+
 - Late users who rejoin within grace time are given a priorityboost
+
+### 5.3 Late User Non-Blocking
+
+- `LATE` users must not block progression of the queue.
+- Multiple `LATE` users may exist simultaneously.
+- Queue promotion must continue while `LATE` users remain unresolved.
+- Promotion logic must ignore `LATE` users when selecting the next `SERVING` candidate.
+
+### 5.4 Promotion Atomicity
+
+- Promotion from `WAITING → SERVING` must:
+  - validate slot availability
+  - select next eligible user
+  - update status
+
+  within a single transaction.
+
+- Partial promotion must never occur.
 
 ---
 
@@ -148,6 +176,7 @@ Violations must be prevented using **transactions and locking**.
 
 ---
 
+<!--
 ## 9. Enforcement Strategy
 
 | Invariant Type | Enforcement Layer                    |
@@ -158,24 +187,15 @@ Violations must be prevented using **transactions and locking**.
 | Ordering       | Application logic + indexed ordering |
 | Temporal       | DB checks + background jobs          |
 
----
-
----
+--- -->
 
 > ## If an invariant is ever violated, the system is broken — even if no error is thrown.
 
-All future features must be designed **around these invariants**, not the other way around.
+> All future features must be designed **around these invariants**, not the other way around.
 
 # new
 
 - A LATE user should NOT block the queue.
-  WAITING
-  ↓
-  SERVING (doctor calls next)
-  ↓ (no show)
-  LATE (grace countdown starts)
-  ↓
-  MISSED
-  ALLOWED
-- Multiple LATE users
+
+- Allowed Multiple LATE users
 - Queue advancing while LATE users exist
