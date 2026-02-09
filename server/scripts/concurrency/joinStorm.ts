@@ -1,8 +1,8 @@
 import generateTokens from "../generateTokens";
 
 async function joinStorm() {
-    const tokens = await generateTokens();
-    const queueId = 32;
+    const tokens = await generateTokens(10, 30);
+    const queueId = 5;
 
     const requests = tokens.map((token) =>
         fetch(`http://localhost:8080/api/v1/queues/${queueId}/join`, {
