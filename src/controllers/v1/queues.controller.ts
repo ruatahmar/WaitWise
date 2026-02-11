@@ -63,6 +63,7 @@ async function countActiveQueueUsers(tx: Prisma.TransactionClient, queueId: numb
                 in: [
                     QueueStatus.WAITING,
                     QueueStatus.LATE,
+                    QueueStatus.SERVING
                 ]
             }
         }
