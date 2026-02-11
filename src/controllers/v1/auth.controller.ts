@@ -1,4 +1,4 @@
-import { Request, Response } from "express";
+import { CookieOptions, Request, Response } from "express";
 import asyncHandler from "../../utils/asyncHandler.js";
 import { prisma } from "../../infra/db.js";
 import ApiError from "../../utils/apiError.js";
@@ -8,6 +8,7 @@ import { generateAccessToken, generateRefreshToken, TokenPayload, REFRESH_TOKEN_
 import ApiResponse from "../../utils/apiResponse.js";
 import { withTransaction } from "../../utils/transaction.js";
 
+const isProd = process.env.NODE_ENV === "production";
 const hashPassword = (password: string): Promise<string> => {
     const saltRound = 10
     return bcrypt.hash(password, saltRound);
@@ -19,10 +20,12 @@ const generateTokens = (data: TokenPayload) => {
 }
 const options = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax" as const,
-    maxAge: REFRESH_TOKEN_EXPIRY_MS
-}
+    secure: true,
+    sameSite: "none",
+    path: "/",
+    maxAge: REFRESH_TOKEN_EXPIRY_MS,
+    domain: isProd ? "api-waitwise.onrender.com" : undefined
+} as CookieOptions;
 
 export const login = asyncHandler(async (req: Request, res: Response) => {
     const { email, password } = req.body as { email: string, password: string };

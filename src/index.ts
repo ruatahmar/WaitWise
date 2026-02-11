@@ -10,12 +10,15 @@ import { jwtAuth } from "./middleware/jwtAuth.js";
 
 const PORT = Number(process.env.PORT) || 8000;
 
+
+
 const app = express();
 
 app.use(cors({
     origin: [
         "http://localhost:5173",
-        "https://waitwise-frontend.vercel.app"
+        "https://waitwise-frontend.vercel.app",
+        /\.vercel\.app$/
     ],
     credentials: true
 }))
@@ -30,7 +33,7 @@ app.use("/api/v1/queues", queueRouter)
 app.use(globalErrorHandler)
 
 app.get("/jwtTest", jwtAuth, () => {
-    console.log("successful")
+    console.log("Success")
     return
 })
 
@@ -42,7 +45,9 @@ const server = http.createServer(app);
 export const io = initSocket(server);
 
 function startHttpServer() {
-    server.listen(8080, () => {
+    server.listen(PORT, () => {
+
+
         console.log("server running on 8080");
     });
 }
