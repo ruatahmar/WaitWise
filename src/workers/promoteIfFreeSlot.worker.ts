@@ -1,6 +1,6 @@
 import { Worker } from "bullmq";
 import { prisma } from "../infra/db.js";
-import { promoteIfAvailableSlot } from "../controllers/v1/queues.controller.js";
+import { triggerPromotion } from "../controllers/v1/queues.controller.js";
 
 import { getRedis } from "../infra/redis.js";
 
@@ -12,15 +12,15 @@ export default function startPromoteIfFreeSlotWorker() {
         "promote-if-free-slot",
         async (job) => {
             const { queueId } = job.data;
-            await prisma.$transaction(async (tx) => {
-                const queue = await tx.queue.findUnique({
-                    where: {
-                        id: queueId
-                    }
-                })
-                if (!queue) return
-                await promoteIfAvailableSlot(tx, queueId, queue?.serviceSlots)
-            })
+            if (!queueId) return
+            try {
+                await triggerPromotion(queueId)
+
+            } catch (error) {
+                console.error("[promote-if-free-slot] promotion error. QueueId:", queueId, error);
+                throw error;
+            }
+
         },
         {
             connection: redisConnection
