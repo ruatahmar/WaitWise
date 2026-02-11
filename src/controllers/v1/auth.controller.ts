@@ -177,7 +177,6 @@ export const refresh = asyncHandler(async (req: Request, res: Response) => {
         throw new ApiError(401, "Unauthorized: missing token or deviceId");
     }
 
-
     const tokenRecord = await prisma.refreshToken.findFirst({
         where: {
             token: refreshToken,
@@ -191,8 +190,8 @@ export const refresh = asyncHandler(async (req: Request, res: Response) => {
     const userId = tokenRecord.userId
     const { accessToken, refreshToken: newRefreshToken } = generateTokens({ userId })
     //async because this endpoint needs to be faster
-    prisma.refreshToken.update({
-        where: { id: tokenRecord.id },
+    await prisma.refreshToken.update({
+        where: { id: tokenRecord.id, deviceId },
         data: {
             token: newRefreshToken,
             expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS)
