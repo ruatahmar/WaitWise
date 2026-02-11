@@ -156,6 +156,7 @@ export const logout = asyncHandler(async (req: Request, res: Response) => {
         )
 
 })
+
 export const logoutAllDevices = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     await prisma.refreshToken.deleteMany({
@@ -176,36 +177,32 @@ export const refresh = asyncHandler(async (req: Request, res: Response) => {
         throw new ApiError(401, "Unauthorized: missing token or deviceId");
     }
 
-    const { accessToken, newRefreshToken } = await withTransaction(async (tx) => {
-        const tokenRecord = await tx.refreshToken.findFirst({
-            where: {
-                token: refreshToken,
-                revoked: false,
-                deviceId,
-                expiresAt: { gt: new Date() }
-            }
-        })
-        if (!tokenRecord) throw new ApiError(401, "Unauthorized")
-        const userId = tokenRecord.userId
-        //delete and create to prevent a replay attack
-        await tx.refreshToken.delete({
-            where: { id: tokenRecord.id },
-        });
-        const { accessToken, refreshToken: newRefreshToken } = generateTokens({ userId })
 
-        await tx.refreshToken.create({
-            data: {
-                userId: userId,
-                deviceId,
-                token: newRefreshToken,
-                expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS)
-            }
-        })
-        return { accessToken, newRefreshToken }
+    const tokenRecord = await prisma.refreshToken.findFirst({
+        where: {
+            token: refreshToken,
+            revoked: false,
+            deviceId,
+            expiresAt: { gt: new Date() }
+        }
     })
+    if (!tokenRecord) throw new ApiError(401, "Unauthorized")
+    const userId = tokenRecord.userId
+    const { accessToken, refreshToken: newRefreshToken } = generateTokens({ userId })
+
+    await prisma.refreshToken.update({
+        where: { id: tokenRecord.id },
+        data: {
+            token: newRefreshToken,
+            expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS)
+        }
+    })
+
 
     return res.status(200).cookie("refreshToken", newRefreshToken, options)
         .json(
             new ApiResponse(200, { accessToken }, "Token refreshed")
         )
 })  
+
+ok im coming to realise that my state change endpoints are taking more time than the actual data retrieval.so i have optimise my code and also find a way to make the socket stuff faster i reckon
