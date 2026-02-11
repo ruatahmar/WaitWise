@@ -12,6 +12,8 @@ export function getRedis(): Redis {
             lazyConnect: true,
             enableReadyCheck: false,
             enableOfflineQueue: false,
+            connectTimeout: 1000,
+
             retryStrategy: () => null,
             reconnectOnError: () => false,
         });

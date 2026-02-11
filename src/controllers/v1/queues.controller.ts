@@ -10,6 +10,7 @@ import { withTransaction } from "../../utils/transaction.js";
 import { calculatePosition, QueueUserTransitionResult, transitionQueueUser } from "../../core/queueUserStateMachine.js";
 import { logEvent } from "../../core/events.js";
 import { emitPromotion, emitQueueUpdate, emitUserStatusUpdate } from "../../utils/socketEmitters.js";
+import { cacheDel, cacheGet, cacheSet, QueueWithCount, UserQueueTickets } from "../../infra/cache.js";
 
 export async function triggerPromotion(queueId: number): Promise<number[]> {
     const result = await withTransaction(async (tx) => {
@@ -119,6 +120,13 @@ export const createQueue = asyncHandler(async (req: Request, res: Response) => {
 
 export const getQueues = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
+    const cacheExists = await cacheGet<QueueWithCount[]>(`queues:admin:${userId}`);
+    if (cacheExists) {
+        return res.status(200)
+            .json(
+                new ApiResponse(200, cacheExists, "Queues returned")
+            )
+    }
     const result = await withTransaction(async (tx) => {
         const queues = await tx.queue.findMany({
             where: {
@@ -134,9 +142,10 @@ export const getQueues = asyncHandler(async (req: Request, res: Response) => {
                 return { ...queue, count }
             })
         )
+
         return queuesWithCount
     })
-
+    await cacheSet(`queues:admin:${userId}`, result, 60)
     return res.status(200)
         .json(
             new ApiResponse(200, result, "Queues returned")
@@ -147,17 +156,27 @@ export const getSpecificQueue = asyncHandler(async (req: Request, res: Response)
     const { userId } = req.user
     const { queueId } = req.params
     const result = await withTransaction(async (tx) => {
-        const queue = await tx.queue.findFirst({
-            where: {
-                id: Number(queueId),
-                adminId: userId
-            }
-        })
-        if (!queue) throw new ApiError(404, "Queue not found or you don't have permission");
-        const count = await countActiveQueueUsers(tx, queue.id)
-        return { ...queue, count }
+        //meta data 
+        let meta = await cacheGet<Queue>(`queue:${queueId}:meta`)
+        if (!meta) {
+            meta = await tx.queue.findFirst({
+                where: {
+                    id: Number(queueId),
+                    adminId: userId
+                }
+            })
+            if (!meta) throw new ApiError(404, "Queue not found or you don't have permission");
+            await cacheSet(`queue:${queueId}:meta`, meta, 300)
+        }
+        //count
+        let count = await cacheGet<number>(`queue:${queueId}:count`);
+        if (count == null) {
+            count = await countActiveQueueUsers(tx, meta.id);
+            await cacheSet(`queue:${queueId}:count`, count, 5);
+        }
+        return { ...meta, count }
     })
-
+    await cacheSet(`queue:${queueId}`, result, 120)
     return res.status(200)
         .json(
             new ApiResponse(200, result, "Queue retrieved")
@@ -181,6 +200,8 @@ export const updateQueue = asyncHandler(async (req: Request, res: Response) => {
         });
         return updated
     });
+    await cacheDel(`queues:admin:${userId}`)
+    await cacheDel(`queue:${queueId}:meta`)
     await triggerPromotion(Number(queueId))
     return res.status(200).json(new ApiResponse(200, result, "Queue updated"));
 });
@@ -193,7 +214,8 @@ export const deleteQueue = asyncHandler(async (req: Request, res: Response) => {
     });
 
     if (deleted.count === 0) throw new ApiError(404, "Queue not found");
-    // (onDelete: Cascade)
+    await cacheDel(`queues:admin:${userId}`)
+    await cacheDel(`queue:${queueId}:meta`)
     return res.status(200)
         .json(
             new ApiResponse(200, deleted, "Queue deleted")
@@ -283,6 +305,8 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
         }
         return transition;
     });
+    await cacheDel(`queue:${queueId}`)
+    await cacheDel(`ticket:user:${userId}`)
     triggerPromotion(Number(queueId))
     emitUserStatusUpdate(transition)
     await emitQueueUpdate(Number(queueId))
@@ -323,7 +347,11 @@ export const leaveQueue = asyncHandler(async (req: Request, res: Response) => {
 export const getQueueStatus = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
+
+
+    //check for queue meta data, if it dont exist:
     const result = await withTransaction(async (tx) => {
+
         const ticket = await tx.queueUser.findUnique({
             where: {
                 userId_queueId: {
@@ -366,6 +394,13 @@ export const getQueueStatus = asyncHandler(async (req: Request, res: Response) =
 
 export const getAllQueueTickets = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
+    const cacheCheck = await cacheGet<UserQueueTickets[]>(`tickets:user:${userId}`)
+    if (cacheCheck) {
+        return res.status(200)
+            .json(
+                new ApiResponse(200, cacheCheck, "All tickets returned")
+            )
+    }
     const result = await prisma.$transaction(async (tx) => {
         const queues = await tx.queueUser.findMany({
             where: {
@@ -384,6 +419,7 @@ export const getAllQueueTickets = asyncHandler(async (req: Request, res: Respons
         })
         return queues
     })
+    await cacheSet(`tickets:user:${userId}`, result, 60)
     return res.status(200)
         .json(
             new ApiResponse(200, result, "All tickets returned")
