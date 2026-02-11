@@ -203,6 +203,5 @@ export const refresh = asyncHandler(async (req: Request, res: Response) => {
         .json(
             new ApiResponse(200, { accessToken }, "Token refreshed")
         )
-})  
+})
 
-ok im coming to realise that my state change endpoints are taking more time than the actual data retrieval.so i have optimise my code and also find a way to make the socket stuff faster i reckon
