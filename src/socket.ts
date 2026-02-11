@@ -8,9 +8,10 @@ export function initSocket(httpServer: HttpServer) {
             origin: [
                 "http://localhost:5173",
                 "https://waitwise-frontend.vercel.app",
-                /\.vercel\.app$/
             ],
             credentials: true,
+            methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allowedHeaders: ["Content-Type", "Authorization"]
         },
     });
 
