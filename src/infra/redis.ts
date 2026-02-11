@@ -1,19 +1,23 @@
 import { Redis } from "ioredis";
-import ApiError from "../utils/apiError.js";
+import "dotenv/config"
 
 let redisConnection: Redis | null = null;
 
+
+
 export function getRedis(): Redis {
     if (!redisConnection) {
-        redisConnection = new Redis({
-            host: "127.0.0.1",
-            port: 6379,
+        const redisUrl = process.env.REDIS_URL;
+        if (!redisUrl) {
+            console.error("⚠️ REDIS_URL not set — caching disabled");
+            return null as any;
+        }
+        redisConnection = new Redis(redisUrl, {
             maxRetriesPerRequest: null,
             lazyConnect: true,
             enableReadyCheck: false,
             enableOfflineQueue: false,
             connectTimeout: 1000,
-
             retryStrategy: () => null,
             reconnectOnError: () => false,
         });
