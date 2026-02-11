@@ -184,13 +184,14 @@ export const refresh = asyncHandler(async (req: Request, res: Response) => {
             revoked: false,
             deviceId,
             expiresAt: { gt: new Date() }
-        }
+        },
+        select: { id: true, userId: true }
     })
     if (!tokenRecord) throw new ApiError(401, "Unauthorized")
     const userId = tokenRecord.userId
     const { accessToken, refreshToken: newRefreshToken } = generateTokens({ userId })
-
-    await prisma.refreshToken.update({
+    //async because this endpoint needs to be faster
+    prisma.refreshToken.update({
         where: { id: tokenRecord.id },
         data: {
             token: newRefreshToken,
