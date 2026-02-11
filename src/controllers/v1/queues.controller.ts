@@ -69,26 +69,21 @@ async function countActiveQueueUsers(tx: Prisma.TransactionClient, queueId: numb
     return count;
 }
 
+function optionalPositiveNumber(value: any): number | undefined {
+    if (value == null) return undefined;
+
+    const num = Number(value);
+
+    if (Number.isNaN(num) || num <= 0) return undefined;
+
+    return num;
+}
+
 //CRUD
 export const createQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user;
     const { name, maxSize = null, serviceSlots = null, graceTime } = req.body;
-    console.log(req.body)
-    //invariant check
-    // let maxSizeCheck: number | null = maxSize
-    // if (maxSize <= 0) {
-    //     maxSizeCheck = null
-    // }
-    // let maxSizeCheck: number | null = maxSize
-    // if (maxSize <= 0) {
-    //     maxSizeCheck = null
-    // }
-    if (graceTime != null && graceTime < 0) {
-        throw new ApiError(400, "turnExpiryMinutes must be > 0");
-    }
-    if (serviceSlots != null && serviceSlots < 0) {
-        throw new ApiError(400, "servingSlots must be > 0");
-    }
+
     const exist = await prisma.queue.findFirst({
         where: {
             adminId: userId,
@@ -100,9 +95,9 @@ export const createQueue = asyncHandler(async (req: Request, res: Response) => {
         data: {
             name,
             // adminId: userId,
-            maxSize: Number(maxSize),
-            serviceSlots: Number(serviceSlots),
-            graceTime: Number(graceTime),
+            maxSize: optionalPositiveNumber(maxSize),
+            serviceSlots: optionalPositiveNumber(serviceSlots),
+            graceTime: optionalPositiveNumber(graceTime),
             admin: {
                 connect: { id: userId }
             }
@@ -166,16 +161,15 @@ export const updateQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
     const { name, maxSize, serviceSlots, graceTime } = req.body;
-    console.log(req.body)
-    const maxSizeCheck = maxSize <= 0 ? null : Number(maxSize)
+
     const result = await withTransaction(async (tx) => {
         const updated = await tx.queue.updateMany({
             where: { id: Number(queueId), adminId: userId },
             data: {
                 name,
-                maxSize: maxSizeCheck,
-                serviceSlots: Number(serviceSlots),
-                graceTime: Number(graceTime)
+                maxSize: optionalPositiveNumber(maxSize),
+                serviceSlots: optionalPositiveNumber(serviceSlots),
+                graceTime: optionalPositiveNumber(graceTime),
             }
         });
         return updated
