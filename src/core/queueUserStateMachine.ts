@@ -229,7 +229,7 @@ async function computeExpiry(
             select: { graceTime: true },
         });
         if (!queue) throw new Error("Queue not found");
-        graceTime = queue.graceTime;
+        graceTime = queue.graceTime ?? 5;
     }
 
     return new Date(

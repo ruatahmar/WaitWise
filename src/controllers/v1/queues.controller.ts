@@ -5,7 +5,7 @@ import asyncHandler from "../../utils/asyncHandler.js";
 import { Request, Response } from "express";
 import ApiResponse from "../../utils/apiResponse.js";
 import { QueueEventType, QueueStatus } from "../../../generated/prisma/enums.js";
-import { Prisma } from "../../../generated/prisma/client.js";
+import { Prisma, Queue } from "../../../generated/prisma/client.js";
 import { withTransaction } from "../../utils/transaction.js";
 import { calculatePosition, QueueUserTransitionResult, transitionQueueUser } from "../../core/queueUserStateMachine.js";
 import { logEvent } from "../../core/events.js";
@@ -23,12 +23,13 @@ export async function triggerPromotion(queueId: number): Promise<number[]> {
             where: { id: queueId }
         })
         if (!queue) return []
+        const settings = getEffectiveQueueSettings(queue)
         while (true) {
 
             const servingCount = await tx.queueUser.count({
                 where: { queueId, status: QueueStatus.SERVING }
             });
-            const openSlots = queue.serviceSlots - servingCount;
+            const openSlots = settings.serviceSlots - servingCount;
             if (openSlots <= 0) break;
             const candidate = await tx.queueUser.findFirst({
                 where: {
@@ -71,12 +72,17 @@ async function countActiveQueueUsers(tx: Prisma.TransactionClient, queueId: numb
 
 function optionalPositiveNumber(value: any): number | undefined {
     if (value == null) return undefined;
-
     const num = Number(value);
-
     if (Number.isNaN(num) || num <= 0) return undefined;
-
     return num;
+}
+
+function getEffectiveQueueSettings(queue: Queue) {
+    return {
+        serviceSlots: queue.serviceSlots ?? 1,
+        graceTime: queue.graceTime ?? 5,
+        maxSize: queue.maxSize ?? null
+    };
 }
 
 //CRUD
@@ -163,7 +169,7 @@ export const updateQueue = asyncHandler(async (req: Request, res: Response) => {
     const { name, maxSize, serviceSlots, graceTime } = req.body;
 
     const result = await withTransaction(async (tx) => {
-        const updated = await tx.queue.updateMany({
+        const updated = await tx.queue.update({
             where: { id: Number(queueId), adminId: userId },
             data: {
                 name,
@@ -199,15 +205,13 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
 
-
-
     const transition = await withTransaction(async (tx): Promise<QueueUserTransitionResult> => {
         //queue existance check
         const queue = await tx.queue.findUnique({
             where: { id: Number(queueId) }
         });
         if (!queue) throw new ApiError(404, "Queue not found");
-
+        const settings = getEffectiveQueueSettings(queue)
         //maxSize check
         const activeCount = await tx.queueUser.count({
             where: {
@@ -215,10 +219,9 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
                 status: { in: [QueueStatus.WAITING, QueueStatus.SERVING, QueueStatus.LATE] }
             }
         });
-        if (queue.maxSize !== null && activeCount >= queue.maxSize) {
+        if (settings.maxSize != null && activeCount >= settings.maxSize) {
             throw new ApiError(400, "Queue full");
         }
-
 
         const existing = await tx.queueUser.findUnique({
             where: {
