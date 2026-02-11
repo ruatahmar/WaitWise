@@ -18,7 +18,10 @@ export function getRedis(): Redis {
 
         // Suppress connection errors
         redisConnection.on('error', (err) => {
-            throw new ApiError(503, "Queue system unavailable");
+            console.error("Redis connection error:", err.message);
+        });
+        redisConnection.on('connect', () => {
+            console.log("Redis connected");
         });
     }
     return redisConnection;
