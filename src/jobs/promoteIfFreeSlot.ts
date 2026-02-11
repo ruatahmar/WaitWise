@@ -25,8 +25,10 @@ export async function enqueuePromoteIfFree(
                 jobId: `promote-if-free-slot-${payload.queueId}`
             }
         )
+        console.log("Enqueue promoteIfFreeSlot", payload)
+        return true;
     } catch (error) {
-        throw new ApiError(503, "Queue system unavailable");
+        console.error("Redis enqueue failed", error);
+        return false;
     }
-    console.log("Enqueue promoteIfFreeSlot", payload)
 }

@@ -166,13 +166,19 @@ export async function transitionQueueUser(
         const now = ctx.now ?? new Date()
         const delayMs = Math.max(0, expiresAt.getTime() - now.getTime());
 
-        await enqueueCheckLateExpiry(
+        const ok = await enqueueCheckLateExpiry(
             { userId: qu.userId, queueId: qu.queueId },
             delayMs
         )
+        if (!ok) {
+            console.log("Late expiry job not scheduled")
+        }
     }
     if (event === "MISSED" || event === "COMPLETE" || event === "LEAVE" || event === "REJOIN") {
-        await enqueuePromoteIfFree({ queueId: qu.queueId })
+        const ok = await enqueuePromoteIfFree({ queueId: qu.queueId })
+        if (!ok) {
+            console.log("Promotion job not scheduled")
+        }
     }
     // await emitEvent(tx, qu.status, nextStatus, event)
     const result: QueueUserTransitionResult = {

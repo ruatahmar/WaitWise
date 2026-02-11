@@ -28,10 +28,12 @@ export async function enqueueCheckLateExpiry(
                 jobId: `late-expiry-${payload.queueId}-${payload.userId}`
             }
         )
+        console.log("Enqueue checkLateExpiry", payload, delayMs)
+        return true
     } catch (error) {
-        throw new ApiError(503, "Queue system unavailable");
+        console.error("Redis enqueue failed", error);
+        return false;
+
     }
 
-    console.log("Enqueue checkLateExpiry", payload, delayMs)
 }
-
