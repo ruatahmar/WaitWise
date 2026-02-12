@@ -287,6 +287,28 @@ WaitWise consists of:
 - reconciliation
 - retry-safe jobs
 
+### Caching Layer
+
+- WaitWise uses **Redis** for temporary caching to reduce database load and speed up frequently-accessed data.
+- All canonical data remains in PostgreSQL; caches are ephemeral and TTL-controlled.
+
+#### Cached Keys
+
+| Cache Key Pattern                      | Description                                       | TTL / Limit               |
+| -------------------------------------- | ------------------------------------------------- | ------------------------- |
+| `queues:admin:{adminId}`               | All queues for a given admin                      | 300s                      |
+| `tickets:user:{userId}`                | All tickets for a user                            | 300s                      |
+| `queue:{queueId}:meta`                 | Queue metadata                                    | 300s                      |
+| `queue:{queueId}:count`                | Active user count in the queue                    | 5s                        |
+| `refresh:{deviceId}:{refreshToken}`    | Refresh token per device                          | `REFRESH_TOKEN_EXPIRY_MS` |
+| `queueStatus:{queueId}:{userId}`       | User’s status in a queue (position, count, state) | 10s                       |
+| `queueUsers:{queueId}:chunk:{pageNum}` | Paginated list of users in a queue                | Limit: 10, TTL: 20s       |
+
+**Notes:**
+
+- Keys are **invalidated on state changes** (join, leave, cancel, serve) to prevent stale data.
+- Refresh tokens are **rotated** if TTL < `ROTATE_THRESHOLD_MS`.
+
 ---
 
 ## 10. Design Goals

@@ -4,6 +4,7 @@ import { QueueStatus } from "../../generated/prisma/enums.js";
 import { transitionQueueUser } from "../core/queueUserStateMachine.js";
 import { io } from "../index.js";
 import { getRedis } from "../infra/redis.js";
+import { cacheDel } from "../infra/cache.js";
 
 export default function startLateExpiryWorker() {
     const redisConnection = getRedis()
@@ -33,6 +34,9 @@ export default function startLateExpiryWorker() {
                     position: transition.position,
                     priorityBoost: transition.priorityBoost,
                 });
+                await cacheDel(`queue:${queueId}:count`)
+                await cacheDel(`queueStatus:${queueId}:${userId}`)
+                await cacheDel(`queue:${queueId}:count`)
             })
         },
         {

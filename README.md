@@ -32,6 +32,7 @@ It ensures users are served in order, respects capacity limits, and handles late
 - **Background workers** enforce expiry and late/missed transitions.
 - **WebSocket events** broadcast state changes for realtime updates.
 - Comprehensive **invariant enforcement**: capacity, ordering, and temporal correctness.
+- **TTL-controlled caching** ensures freshness while improving performance.
 
 ---
 
@@ -89,8 +90,9 @@ WaitWise includes detailed documentation for deeper understanding:
 
 - WaitWise is correctness-first — it prioritizes reliable queue management over fancy UX or extreme throughput.
 - Background jobs and transactions ensure the queue is always consistent.
+- Uses Redis caching to speed up frequent queries and reduce database load.
 - Future updates may include more scheduling and automation features.
 
 ## Architecture Diagram
 
-![WaitWise Architecture](docs/assets/architecture.png)
+![WaitWise Architecture](docs/assets/WaitWise.png)

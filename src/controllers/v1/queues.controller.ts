@@ -53,6 +53,7 @@ export async function triggerPromotion(queueId: number): Promise<number[]> {
         emitPromotion(id)
         await emitQueueUpdate(queueId)
     }
+
     return result;
 }
 
