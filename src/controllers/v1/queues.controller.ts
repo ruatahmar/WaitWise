@@ -305,7 +305,9 @@ export const joinQueue = asyncHandler(async (req: Request, res: Response) => {
         }
         return transition;
     });
+    await cacheDel(`queueStatus:${queueId}:${userId}`)
     await cacheDel(`queue:${queueId}`)
+    await cacheDel(`queueUsers:${queueId}:chunk:*`);
     await cacheDel(`ticket:user:${userId}`)
     triggerPromotion(Number(queueId))
     emitUserStatusUpdate(transition)
@@ -336,6 +338,8 @@ export const leaveQueue = asyncHandler(async (req: Request, res: Response) => {
     })
     triggerPromotion(Number(queueId))
     emitUserStatusUpdate(transition)
+    await cacheDel(`queueUsers:${queueId}:chunk:*`);
+    await cacheDel(`queueStatus:${queueId}:${userId}`)
     await emitQueueUpdate(Number(queueId))
     console.log("entered")
     return res.status(200)
@@ -347,9 +351,13 @@ export const leaveQueue = asyncHandler(async (req: Request, res: Response) => {
 export const getQueueStatus = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.user
     const { queueId } = req.params
-
-
-    //check for queue meta data, if it dont exist:
+    const cacheCheck = await cacheGet(`queueStatus:${queueId}:${userId}`);
+    if (cacheCheck) {
+        return res.status(200)
+            .json(
+                new ApiResponse(200, cacheCheck, "Queue Status Returned")
+            )
+    }
     const result = await withTransaction(async (tx) => {
 
         const ticket = await tx.queueUser.findUnique({
@@ -377,15 +385,16 @@ export const getQueueStatus = asyncHandler(async (req: Request, res: Response) =
             },
         })
         if (!ticket) throw new ApiError(404, "You are not in this queue.");
+        const count = await countActiveQueueUsers(tx, Number(queueId))
         if (ticket.status !== QueueStatus.WAITING) {
-            return { ...ticket, position: null }
+            return { ...ticket, position: null, count }
         }
         const position = await calculatePosition(tx, Number(queueId), ticket.joinedAt, ticket.priorityBoost)
         console.log(position)
-        const count = await countActiveQueueUsers(tx, Number(queueId))
         return { ...ticket, position, count }
 
     })
+    await cacheSet(`queueStatus:${queueId}:${userId}`, result, 10)
     return res.status(200)
         .json(
             new ApiResponse(200, result, "Queue Status Returned")
@@ -442,6 +451,8 @@ export const lateRejoin = asyncHandler(async (req: Request, res: Response) => {
     });
     triggerPromotion(Number(queueId))
     emitUserStatusUpdate(transition)
+    await cacheDel(`queueUsers:${queueId}:chunk:*`);
+    await cacheDel(`queueStatus:${queueId}:${userId}`)
     await emitQueueUpdate(Number(queueId))
     const message = transition.to === QueueStatus.WAITING ? "Successfully rejoined" : "Late please rejoin"
     return res.status(200)
@@ -469,6 +480,8 @@ export const markComplete = asyncHandler(async (req: Request, res: Response) => 
         // const promotedIds = await promoteIfAvailableSlot(tx, queue.id, queue.serviceSlots)
         return transition//{ , promotedIds };
     })
+    await cacheDel(`queueStatus:${queueId}:${targetUserId}`)
+    await cacheDel(`queueUsers:${queueId}:chunk:*`);
     triggerPromotion(Number(queueId))
     emitUserStatusUpdate(transition)
     await emitQueueUpdate(Number(queueId))
@@ -499,6 +512,8 @@ export const markLate = asyncHandler(async (req: Request, res: Response) => {
 
         return transition//{ , promotedIds }
     })
+    await cacheDel(`queueStatus:${queueId}:${targetUserId}`)
+    await cacheDel(`queueUsers:${queueId}:chunk:*`);
     triggerPromotion(Number(queueId))
     emitUserStatusUpdate(transition)
     await emitQueueUpdate(Number(queueId))
@@ -527,7 +542,8 @@ export const removeQueueUser = asyncHandler(async (req: Request, res: Response) 
     })
 
     triggerPromotion(Number(queueId))
-
+    await cacheDel(`queueStatus:${queueId}:${targetUserId}`)
+    await cacheDel(`queueUsers:${queueId}:chunk:*`);
     emitUserStatusUpdate(transition)
     await emitQueueUpdate(Number(queueId))
     return res.status(200)
@@ -544,6 +560,12 @@ export const getQueueUsersPaginated = asyncHandler(async (req: Request, res: Res
     const pageNum = Math.max(0, Number(page) || 0);
     const limit = 10;
 
+    const cacheCheck = await cacheGet(`queueUsers:${queueId}:chunk:${pageNum}`);
+    if (cacheCheck) {
+        return res.status(200).json(
+            new ApiResponse(200, cacheCheck, "Data fetched")
+        )
+    }
     const { users, total } = await withTransaction(async (tx) => {
         const queue = await tx.queue.findFirst({
             where: {
@@ -556,13 +578,6 @@ export const getQueueUsersPaginated = asyncHandler(async (req: Request, res: Res
         const users = await tx.queueUser.findMany({
             where: {
                 queueId: Number(queueId),
-                // status: {
-                //     in: [
-                //         QueueStatus.SERVING,
-                //         QueueStatus.WAITING,
-                //         QueueStatus.LATE
-                //     ]
-                // }
             },
             include: {
                 user: {
@@ -589,13 +604,14 @@ export const getQueueUsersPaginated = asyncHandler(async (req: Request, res: Res
     const result = {
         users,
         paginated: {
-            page,
+            page: pageNum,
             limit,
             total,
             totalPages: Math.ceil(total / limit)
 
         }
     }
+    await cacheSet(`queueUsers:${queueId}:chunk:${pageNum}`, result, 20)
     return res.status(200).json(
         new ApiResponse(200, result, "Data fetched")
     )
@@ -619,6 +635,8 @@ export const lateArrived = asyncHandler(async (req: Request, res: Response) => {
     });
     triggerPromotion(Number(queueId))
     emitUserStatusUpdate(transition)
+    await cacheDel(`queueStatus:${queueId}:${targetUserId}`)
+    await cacheDel(`queueUsers:${queueId}:chunk:*`);
     await emitQueueUpdate(Number(queueId))
     const message = transition.to === QueueStatus.WAITING ? "Successfully rejoined" : "Late please rejoin"
 
