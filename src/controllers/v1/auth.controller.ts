@@ -7,17 +7,21 @@ import { v4 as uuidv4 } from 'uuid';
 import { generateAccessToken, generateRefreshToken, TokenPayload, REFRESH_TOKEN_EXPIRY_MS } from "../../utils/tokens.js";
 import ApiResponse from "../../utils/apiResponse.js";
 import { withTransaction } from "../../utils/transaction.js";
+import { cacheDel, cacheGet, cacheSet, cacheTTL } from "../../infra/cache.js";
 
 const isProd = process.env.NODE_ENV === "production";
+
 const hashPassword = (password: string): Promise<string> => {
     const saltRound = 10
     return bcrypt.hash(password, saltRound);
 }
+
 const generateTokens = (data: TokenPayload) => {
     const accessToken = generateAccessToken(data)
     const refreshToken = generateRefreshToken(data)
     return { accessToken, refreshToken }
 }
+
 const options = {
     httpOnly: true,
     secure: true,
@@ -177,29 +181,43 @@ export const refresh = asyncHandler(async (req: Request, res: Response) => {
         throw new ApiError(401, "Unauthorized: missing token or deviceId");
     }
 
-    const tokenRecord = await prisma.refreshToken.findFirst({
-        where: {
-            token: refreshToken,
-            revoked: false,
-            deviceId,
-            expiresAt: { gt: new Date() }
-        },
-        select: { id: true, userId: true }
-    })
-    if (!tokenRecord) throw new ApiError(401, "Unauthorized")
-    const userId = tokenRecord.userId
-    const { accessToken, refreshToken: newRefreshToken } = generateTokens({ userId })
-    //async because this endpoint needs to be faster
-    await prisma.refreshToken.update({
-        where: { id: tokenRecord.id, deviceId },
-        data: {
-            token: newRefreshToken,
-            expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS)
-        }
-    })
+    const tokenKey = `refresh:${deviceId}:${refreshToken}`
+    let userId = await cacheGet(tokenKey);
+    if (!userId) {
+        const tokenRecord = await prisma.refreshToken.findFirst({
+            where: {
+                token: refreshToken,
+                revoked: false,
+                deviceId,
+                expiresAt: { gt: new Date() }
+            },
+            select: { id: true, userId: true }
+        })
+        if (!tokenRecord) throw new ApiError(401, "Unauthorized")
+        userId = tokenRecord.userId
+        await cacheSet(tokenKey, userId, REFRESH_TOKEN_EXPIRY_MS);
+    }
 
+    const { accessToken, refreshToken: newRefreshToken } = generateTokens({ userId: Number(userId) })
+    const ttl = await cacheTTL(tokenKey);
+    const ROTATE_THRESHOLD_MS = 1000 * 60 * 60; //1hour 
+    if (ttl !== null && ttl < ROTATE_THRESHOLD_MS) {
+        const newTokenKey = `refresh:${deviceId}:${newRefreshToken}`;
+        await prisma.refreshToken.updateMany({
+            where: { token: refreshToken, deviceId },
+            data: {
+                token: newRefreshToken,
+                expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS)
+            }
+        });
 
-    return res.status(200).cookie("refreshToken", newRefreshToken, options)
+        await cacheDel(tokenKey);
+        await cacheSet(newTokenKey, userId, REFRESH_TOKEN_EXPIRY_MS)
+        res.cookie("refreshToken", newRefreshToken, options);
+    } else {
+        res.cookie("refreshToken", refreshToken, options);
+    }
+    return res.status(200)
         .json(
             new ApiResponse(200, { accessToken }, "Token refreshed")
         )
