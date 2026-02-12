@@ -3,6 +3,8 @@
 **WaitWise** is a virtual queue management system designed to manage service queues reliably, even under concurrency and time-based transitions.  
 It ensures users are served in order, respects capacity limits, and handles late or missed turns automatically.
 
+The frontend for WaitWise is a separate repository: [WaitWise Frontend](https://github.com/ruatahmar/WaitWise-frontend)
+
 ---
 
 ## Quick Overview
@@ -60,6 +62,13 @@ Endpoints are grouped by role:
 
 ---
 
+## Realtime Updates
+
+- WebSockets emit events after transitions (promotions, completions, cancellations, expiry updates).
+- Clients should treat events as informational hints; authoritative state is always in the database.
+
+---
+
 ## Documentation
 
 WaitWise includes detailed documentation for deeper understanding:
@@ -77,10 +86,39 @@ WaitWise includes detailed documentation for deeper understanding:
 
 ## Getting Started
 
-## Realtime Updates
+Follow these steps to run the WaitWise backend locally:
 
-- WebSockets emit events after transitions (promotions, completions, cancellations, expiry updates).
-- Clients should treat events as informational hints; authoritative state is always in the database.
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/your-username/WaitWise.git
+cd waitwise-backend
+```
+
+### 2. Install dependencies
+
+```
+npm install
+```
+
+### 3. Configure environment variables
+
+Create a .env file in the root directory and add your configuration. You can use the `.env.example` for reference.
+
+### 4. Run the database migrations
+
+```
+npx prisma migrate dev
+npx prisma generate
+```
+
+### 5. Start the server
+
+```
+npm run dev
+```
+
+The backend will run at http://localhost:8000 by default.
 
 ## Postman Collection
 
