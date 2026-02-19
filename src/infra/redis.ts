@@ -9,7 +9,7 @@ export function getRedis(): Redis {
     if (!redisConnection) {
         const redisUrl = process.env.REDIS_URL;
         if (!redisUrl) {
-            console.error("⚠️ REDIS_URL not set — caching disabled");
+            console.error("REDIS_URL not set — caching disabled");
             return null as any;
         }
         redisConnection = new Redis(redisUrl, {
