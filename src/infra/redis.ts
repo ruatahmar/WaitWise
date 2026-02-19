@@ -1,5 +1,6 @@
 import { Redis } from "ioredis";
 import "dotenv/config"
+import { startWorkers } from "../workers/start.js";
 
 let redisConnection: Redis | null = null;
 
@@ -29,6 +30,8 @@ export function getRedis(): Redis {
         redisConnection.on('connect', () => {
             console.log("Redis connected");
         });
+
+        startWorkers()
     }
     return redisConnection;
 }
