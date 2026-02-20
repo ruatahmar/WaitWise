@@ -1,4 +1,4 @@
-# WaitWise V1
+# WaitWise
 
 **WaitWise** is a virtual queue management system designed to manage service queues reliably, even under concurrency and time-based transitions.  
 It ensures users are served in order, respects capacity limits, and handles late or missed turns automatically.
